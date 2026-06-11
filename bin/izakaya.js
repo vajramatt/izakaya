@@ -68,6 +68,9 @@ const G = {
   edit: "",
   claude: "✳",
   search: "",
+  tag: "",
+  users: "",
+  pulse: "",
   warn: "",
   ok: "",
   lantern: "🏮",
@@ -336,6 +339,12 @@ async function scanRepo(dirent) {
     version: null,
     hasClaudeMd: false,
     readmeTitle: null,
+    recent: [],
+    weeks: new Array(12).fill(0),
+    chefs: [],
+    branches: 0,
+    tags: 0,
+    stash: 0,
   };
 
   try {
@@ -344,13 +353,19 @@ async function scanRepo(dirent) {
   } catch {}
 
   if (repo.isGit) {
-    const [branch, status, log, count, remote, ab] = await Promise.all([
+    const [branch, status, log, count, remote, ab, recent, activity, authors, branches, tags, stash] = await Promise.all([
       git(dir, "rev-parse", "--abbrev-ref", "HEAD"),
       git(dir, "status", "--porcelain"),
       git(dir, "log", "-1", "--format=%s%x00%an%x00%ct"),
       git(dir, "rev-list", "--count", "HEAD"),
       git(dir, "remote", "get-url", "origin"),
       git(dir, "rev-list", "--left-right", "--count", "@{u}...HEAD"),
+      git(dir, "log", "-4", "--format=%ct%x00%s"),
+      git(dir, "log", "--since=84.days", "--format=%ct", "-n", "500"),
+      git(dir, "log", "--format=%an", "-n", "300"),
+      git(dir, "branch", "--format=%(refname:short)"),
+      git(dir, "tag"),
+      git(dir, "stash", "list"),
     ]);
     repo.branch = branch || "—";
     repo.dirty = status ? status.split("\n").filter(Boolean).length : 0;
@@ -372,6 +387,28 @@ async function scanRepo(dirent) {
       repo.behind = behind;
       repo.ahead = ahead;
     }
+    if (recent)
+      repo.recent = recent.split("\n").filter(Boolean).map((l) => {
+        const [ct, msg] = l.split("\0");
+        return { ct: parseInt(ct, 10) || 0, msg: msg || "" };
+      });
+    if (activity) {
+      const now = Date.now() / 1000;
+      for (const l of activity.split("\n")) {
+        const ct = parseInt(l, 10);
+        if (!ct) continue;
+        const idx = 11 - Math.floor((now - ct) / (7 * 86400));
+        if (idx >= 0 && idx <= 11) repo.weeks[idx]++;
+      }
+    }
+    if (authors) {
+      const m = new Map();
+      for (const a of authors.split("\n")) if (a) m.set(a, (m.get(a) || 0) + 1);
+      repo.chefs = [...m.entries()].sort((x, y) => y[1] - x[1]).slice(0, 3);
+    }
+    repo.branches = branches ? branches.split("\n").filter(Boolean).length : 0;
+    repo.tags = tags ? tags.split("\n").filter(Boolean).length : 0;
+    repo.stash = stash ? stash.split("\n").filter(Boolean).length : 0;
   }
 
   const acc = { files: 0, bytes: 0, langs: {} };
@@ -411,8 +448,13 @@ async function scanRepo(dirent) {
   for (const rm of ["README.md", "readme.md", "README"]) {
     try {
       const head = (await fs.readFile(path.join(dir, rm), "utf8")).split("\n");
-      const line = head.find((l) => l.trim() && !l.startsWith("#")) ||
-        head.find((l) => l.trim());
+      // first line of actual prose — skip headings, HTML, badges, images,
+      // blockquotes, tables, rules, and frontmatter fences
+      const line =
+        head.find((l) => {
+          const t = l.trim();
+          return t && !/^[#<!\[>|`:=~-]/.test(t);
+        }) || head.find((l) => l.trim());
       repo.readmeTitle =
         line?.replace(/^#+\s*/, "").replace(/[*_`>]/g, "").trim().slice(0, 120) || null;
       break;
@@ -439,6 +481,8 @@ const state = {
   phase: 0,
   filter: "",
   filtering: false,
+  leaving: false,
+  saying: null,
 };
 
 const visible = () =>
@@ -642,6 +686,8 @@ function langBar(repo, width) {
 function detailLines(repo, W, H) {
   const L = [];
   const pad = (s = "") => L.push(s);
+  const rule = (label) =>
+    `  ${fg(T.fgFaint)}─ ${fg(T.fgDim)}${label} ${fg(T.fgFaint)}${"─".repeat(Math.max(0, W - visW(label) - 7))}`;
 
   pad();
   // title ribbon, same shape as the prompt: ░▒▓  icon │ name │ path
@@ -690,16 +736,51 @@ function detailLines(repo, W, H) {
         repo.lastAuthor ? fg(T.fgFaint) + ` by ${repo.lastAuthor}` : ""
       }  ${fg(T.fgDim)}· ${repo.commits} commit${repo.commits === 1 ? "" : "s"}`
     );
+    for (let i = 1; i < repo.recent.length; i++) {
+      const rc = repo.recent[i];
+      const limb = i === repo.recent.length - 1 ? "└" : "├";
+      pad(
+        `  ${fg(T.fgFaint)}${limb} ${fg(T.fgDim)}${relTime(rc.ct).padEnd(8)}${fg(T.fgDim)}${rc.msg}`
+      );
+    }
     pad(
       repo.remote
         ? `  ${fg(T.fgDim)}${G.remote} ${fg(T.cyan)}${repo.remote}`
         : `  ${fg(T.fgDim)}${G.remote} ${fg(T.fgFaint)}no remote — house brew only`
+    );
+
+    pad();
+    pad(rule("the kitchen"));
+    const SPARK = "▁▂▃▄▅▆▇█";
+    const peak = Math.max(...repo.weeks, 1);
+    let spark = "";
+    for (let i = 0; i < repo.weeks.length; i++)
+      spark += repo.weeks[i] === 0
+        ? fg(T.fgFaint) + "▁"
+        : gradColor((i / repo.weeks.length) * 0.9) +
+          SPARK[Math.min(7, Math.max(1, Math.ceil((repo.weeks[i] / peak) * 7)))];
+    pad(
+      `  ${fg(T.fgDim)}${G.pulse} pours   ${spark}${RESET}${bg(T.bg)}  ${fg(T.fgFaint)}12 weeks` +
+        (repo.weeks.every((w) => w === 0) ? " — the kitchen sleeps" : "")
+    );
+    if (repo.chefs.length)
+      pad(
+        `  ${fg(T.fgDim)}${G.users} chefs   ` +
+          repo.chefs
+            .map(([n, c]) => `${fg(T.fg)}${n} ${fg(T.fgFaint)}${c}`)
+            .join(`${fg(T.fgDim)}  ·  `)
+      );
+    pad(
+      `  ${fg(T.fgDim)}${G.branch} shelf   ${fg(T.fg)}${repo.branches}${fg(T.fgDim)} ` +
+        `branch${repo.branches === 1 ? "" : "es"}  ·  ${G.tag} ${fg(T.fg)}${repo.tags}${fg(T.fgDim)} ` +
+        `tag${repo.tags === 1 ? "" : "s"}  ·  ${fg(T.fg)}${repo.stash}${fg(T.fgDim)} stashed`
     );
   } else {
     pad(`  ${fg(T.orange)}${G.warn} not a git repo ${fg(T.fgFaint)}— off-menu item`);
   }
 
   pad();
+  pad(rule("the pantry"));
   const barW = Math.min(W - 6, 44);
   pad(`  ${langBar(repo, barW)}`);
   const legend = repo.langs
@@ -780,9 +861,47 @@ function splashFrame(W, H) {
   return lines;
 }
 
+function farewellFrame(W, H) {
+  const center = (s) =>
+    bg(T.bg) + " ".repeat(Math.max(0, Math.floor((W - visW(s)) / 2))) + s;
+  const blank = bg(T.bg) + " ".repeat(W) + RESET;
+
+  const body = [];
+  if (W >= ART[0].length + 2 && H >= ART.length + 9) {
+    for (let row = 0; row < ART.length; row++)
+      body.push(center(gradientLine(ART[row], row * 0.07 + state.phase)) + RESET);
+    body.push(blank);
+  }
+  const [jp, romaji, en] = state.saying;
+  body.push(center(BOLD + fg(T.fg) + `「${jp}」`) + RESET);
+  body.push(center(ITAL + fg(T.fgDim) + `${romaji} — ${en}`) + RESET);
+  body.push(blank);
+  body.push(
+    center(
+      fg(T.magenta) + "またね" + bg(T.bg) + fg(T.fgDim) +
+        ` — thanks for stopping by. ${state.repos.length} plates served.`
+    ) + RESET
+  );
+  body.push(blank);
+  body.push(center(fg(T.fgFaint) + "( any key )") + RESET);
+
+  const top = Math.max(0, Math.floor((H - body.length) / 2));
+  const lines = [];
+  for (let i = 0; i < H; i++) {
+    const b = body[i - top];
+    lines.push(b ? padW(b + bg(T.bg), W) + RESET : blank);
+  }
+  return lines;
+}
+
 function render() {
   const W = out.columns || 80;
   const H = out.rows || 24;
+
+  if (state.leaving) {
+    out.write("\x1b[H" + farewellFrame(W, H).join("\r\n"));
+    return;
+  }
 
   if (state.splash) {
     out.write("\x1b[H" + splashFrame(W, H).join("\r\n"));
@@ -850,30 +969,27 @@ function cleanup() {
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
 }
 
+// Leaving is a scene, not an exit: the shell's transient prompt can't eat a
+// farewell that's still on the alt screen. Hold it, then slip out quietly.
 function leave() {
+  if (state.leaving) return reallyLeave();
+  state.leaving = true;
+  state.splash = false;
+  clearInterval(splashTimer);
+  state.saying = SAYINGS[Math.floor(Math.random() * SAYINGS.length)];
+  setInterval(() => {
+    state.phase += 0.016;
+    render();
+  }, 50);
+  setTimeout(reallyLeave, 2800);
+  render();
+}
+
+function reallyLeave() {
   cleanup();
-  const artW = ART[0].length;
-  const cols = out.columns || 80;
-  const center = (s) => " ".repeat(Math.max(0, Math.floor((artW - visW(s)) / 2)) + 2) + s;
-  const lines = [""];
-  if (cols >= artW + 4) {
-    // the logo one last time, frozen wherever the neon happened to be
-    for (let row = 0; row < ART.length; row++)
-      lines.push("  " + gradientLine(ART[row], row * 0.07 + state.phase) + RESET);
-    lines.push("");
-  }
-  const [jp, romaji, en] = SAYINGS[Math.floor(Math.random() * SAYINGS.length)];
-  lines.push(center(`${BOLD}${fg(T.fg)}「${jp}」${RESET}`));
-  lines.push(center(`${ITAL}${fg(T.fgDim)}${romaji} — ${en}${RESET}`));
-  lines.push("");
-  lines.push(
-    center(
-      `${fg(T.magenta)}またね${RESET}${fg(T.fgDim)} — thanks for stopping by. ` +
-        `${state.repos.length} plates served.${RESET}`
-    )
+  console.log(
+    `${G.lantern} ${fg(T.magenta)}またね${RESET} — ${state.repos.length} plates served.`
   );
-  lines.push("");
-  console.log(lines.join("\n"));
   process.exit(0);
 }
 
@@ -885,7 +1001,8 @@ function move(d) {
 
 function onKey(buf) {
   const k = buf.toString();
-  if (k === "\x03") return leave();
+  if (state.leaving) return reallyLeave();
+  if (k === "\x03") return reallyLeave();
   if (state.splash) {
     // any other key skips the splash
     return endSplash();
@@ -1007,8 +1124,8 @@ process.stdin.resume();
 process.stdin.on("data", onKey);
 out.on("resize", render);
 setInterval(render, 30_000); // keep the header clock honest
-process.on("SIGINT", leave);
-process.on("SIGTERM", leave);
+process.on("SIGINT", reallyLeave);
+process.on("SIGTERM", reallyLeave);
 process.on("exit", cleanup);
 
 scanAll();
