@@ -72,6 +72,44 @@ const G = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Splash — figlet 'ANSI Shadow' logo with the athena-brain gradient recipe:
+// per-char TokyoNight gradient, row-phased so it waves down the rows.
+// Pre-rendered (zero deps); docs/banner.mjs uses the same art for the SVG.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ART = `
+██╗███████╗ █████╗ ██╗  ██╗ █████╗ ██╗   ██╗ █████╗
+██║╚══███╔╝██╔══██╗██║ ██╔╝██╔══██╗╚██╗ ██╔╝██╔══██╗
+██║  ███╔╝ ███████║█████╔╝ ███████║ ╚████╔╝ ███████║
+██║ ███╔╝  ██╔══██║██╔═██╗ ██╔══██║  ╚██╔╝  ██╔══██║
+██║███████╗██║  ██║██║  ██╗██║  ██║   ██║   ██║  ██║
+╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝
+`.replace(/^\n|\n$/g, "").split("\n");
+
+// TokyoNight gradient stops: blue → cyan → purple → teal → green → pink.
+const STOPS = [
+  [122, 162, 247], [125, 207, 255], [187, 154, 247], [115, 218, 202], [158, 206, 106], [247, 118, 142],
+];
+
+const lerp = (a, b, t) => Math.round(a + (b - a) * t);
+function gradColor(p) {
+  const x = ((p % 1) + 1) % 1;
+  const seg = x * (STOPS.length - 1);
+  const i = Math.min(STOPS.length - 2, Math.floor(seg));
+  const t = seg - i;
+  const [a, b] = [STOPS[i], STOPS[i + 1]];
+  return `\x1b[38;2;${lerp(a[0], b[0], t)};${lerp(a[1], b[1], t)};${lerp(a[2], b[2], t)}m`;
+}
+
+function gradientLine(line, phase, spread = 0.9) {
+  const n = Math.max(line.length, 1);
+  let s = "";
+  for (let i = 0; i < line.length; i++)
+    s += line[i] === " " ? " " : gradColor((i / n) * spread + phase) + line[i];
+  return s;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Languages — extension map with TokyoNight-friendly colors + nerd icons
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -357,7 +395,33 @@ const state = {
   toScan: 0,
   sort: "recent", // recent | name | size
   status: "",
+  splash: true,
+  phase: 0,
 };
+
+const SPLASH_MIN_MS = 1600;
+const splashStart = Date.now();
+
+// The neon flows while the curtain is up: tick the gradient phase ~20fps.
+const splashTimer = setInterval(() => {
+  if (state.splash) {
+    state.phase += 0.016;
+    render();
+  }
+}, 50);
+
+function endSplash() {
+  if (!state.splash) return;
+  state.splash = false;
+  clearInterval(splashTimer);
+  flash("いらっしゃいませ — welcome in");
+}
+
+// Drop the curtain once the first scan is done and the logo has had its moment.
+function maybeEndSplash() {
+  const wait = Math.max(0, SPLASH_MIN_MS - (Date.now() - splashStart));
+  setTimeout(endSplash, wait);
+}
 
 const SORTS = {
   recent: (a, b) => b.lastUnix - a.lastUnix,
@@ -404,6 +468,7 @@ async function scanAll() {
   await Promise.all(workers);
   state.scanning = false;
   applySort();
+  maybeEndSplash();
   render();
 }
 
@@ -605,9 +670,57 @@ function detailLines(repo, W, H) {
   return L.slice(0, H);
 }
 
+function splashFrame(W, H) {
+  const center = (s) =>
+    bg(T.bg) + " ".repeat(Math.max(0, Math.floor((W - visW(s)) / 2))) + s;
+  const blank = bg(T.bg) + " ".repeat(W) + RESET;
+
+  const body = [];
+  if (W >= ART[0].length + 2 && H >= ART.length + 8) {
+    for (let row = 0; row < ART.length; row++)
+      body.push(center(gradientLine(ART[row], row * 0.07 + state.phase)) + RESET);
+    body.push(blank);
+    body.push(center(fg(T.fgDim) + "🏮 居酒屋 — a cozy little bar where your repos are the menu") + RESET);
+  } else {
+    body.push(center(BOLD + fg(T.magenta) + "🏮 居酒屋 izakaya") + RESET);
+  }
+  body.push(blank);
+
+  // the pour: a gradient bar that fills as plates come out of the kitchen
+  const barW = Math.min(34, Math.max(10, W - 10));
+  const fillW = state.scanning
+    ? state.toScan
+      ? Math.round((state.scanned / state.toScan) * barW)
+      : 0
+    : barW;
+  body.push(
+    center(
+      gradientLine("█".repeat(fillW), state.phase * 1.5, 0.6) +
+        RESET + bg(T.bg) + fg(T.fgFaint) + "░".repeat(barW - fillW)
+    ) + RESET
+  );
+  const progress = state.scanning
+    ? `${G.sake} pouring… ${state.scanned}/${state.toScan || "?"}`
+    : `${G.sake} ${state.repos.length} plates ready`;
+  body.push(center(fg(T.teal) + ITAL + progress) + RESET);
+
+  const top = Math.max(0, Math.floor((H - body.length) / 2));
+  const lines = [];
+  for (let i = 0; i < H; i++) {
+    const b = body[i - top];
+    lines.push(b ? padW(b + bg(T.bg), W) + RESET : blank);
+  }
+  return lines;
+}
+
 function render() {
   const W = out.columns || 80;
   const H = out.rows || 24;
+
+  if (state.splash) {
+    out.write("\x1b[H" + splashFrame(W, H).join("\r\n"));
+    return;
+  }
   const listW = Math.max(26, Math.min(38, Math.floor(W * 0.34)));
   const bodyH = H - 3; // header, blank, footer
 
@@ -679,6 +792,10 @@ function move(d) {
 function onKey(buf) {
   const k = buf.toString();
   if (k === "q" || k === "\x03" || k === "\x1b" && buf.length === 1) return leave();
+  if (state.splash) {
+    // any other key skips the splash
+    return endSplash();
+  }
   if (k === "j" || k === "\x1b[B") return move(1);
   if (k === "k" || k === "\x1b[A") return move(-1);
   if (k === "g") return move(-Infinity);
