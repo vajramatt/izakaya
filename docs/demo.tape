@@ -46,6 +46,6 @@ Sleep 1s
 Type "g"
 Sleep 1.5s
 
-# またね
+# またね — the farewell scene plays, then auto-exits
 Type "q"
-Sleep 1.5s
+Sleep 3.5s
