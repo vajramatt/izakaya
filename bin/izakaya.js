@@ -113,6 +113,43 @@ function gradientLine(line, phase, spread = 0.9) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Kotowaza — traditional sayings, one poured on the way out. [jp, romaji, en]
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SAYINGS = [
+  ["七転び八起き", "nana korobi ya oki", "fall seven times, get up eight"],
+  ["猿も木から落ちる", "saru mo ki kara ochiru", "even monkeys fall from trees"],
+  ["石の上にも三年", "ishi no ue ni mo sannen", "three years sitting on a stone — patience prevails"],
+  ["案ずるより産むが易し", "anzuru yori umu ga yasushi", "doing is easier than worrying about it"],
+  ["井の中の蛙大海を知らず", "i no naka no kawazu taikai o shirazu", "a frog in a well knows nothing of the ocean"],
+  ["花より団子", "hana yori dango", "dumplings over flowers — substance over style"],
+  ["急がば回れ", "isogaba maware", "when in a hurry, take the long way around"],
+  ["塵も積もれば山となる", "chiri mo tsumoreba yama to naru", "even dust, piled up, becomes a mountain"],
+  ["出る杭は打たれる", "deru kui wa utareru", "the stake that sticks out gets hammered down"],
+  ["蛙の子は蛙", "kaeru no ko wa kaeru", "the child of a frog is a frog"],
+  ["二兎を追う者は一兎をも得ず", "nito o ou mono wa itto o mo ezu", "chase two hares and catch neither"],
+  ["三人寄れば文殊の知恵", "sannin yoreba monju no chie", "three people together have the wisdom of Monju"],
+  ["能ある鷹は爪を隠す", "nō aru taka wa tsume o kakusu", "the skilled hawk hides its talons"],
+  ["十人十色", "jūnin toiro", "ten people, ten colors"],
+  ["継続は力なり", "keizoku wa chikara nari", "persistence is power"],
+  ["雨降って地固まる", "ame futte ji katamaru", "after the rain, the ground hardens"],
+  ["口は災いの元", "kuchi wa wazawai no moto", "the mouth is the source of misfortune"],
+  ["知らぬが仏", "shiranu ga hotoke", "not knowing is Buddha — ignorance is bliss"],
+  ["猫に小判", "neko ni koban", "gold coins to a cat"],
+  ["餅は餅屋", "mochi wa mochiya", "for mochi, go to the mochi maker"],
+  ["灯台下暗し", "tōdai moto kurashi", "it is darkest at the base of the lighthouse"],
+  ["百聞は一見に如かず", "hyakubun wa ikken ni shikazu", "hearing a hundred times is not worth one look"],
+  ["良薬は口に苦し", "ryōyaku wa kuchi ni nigashi", "good medicine tastes bitter"],
+  ["千里の道も一歩から", "senri no michi mo ippo kara", "a thousand-mile road begins with a single step"],
+  ["笑う門には福来る", "warau kado ni wa fuku kitaru", "fortune comes to a laughing gate"],
+  ["覆水盆に返らず", "fukusui bon ni kaerazu", "spilled water does not return to the tray"],
+  ["木を見て森を見ず", "ki o mite mori o mizu", "seeing the trees, missing the forest"],
+  ["一期一会", "ichigo ichie", "one time, one meeting — treasure every encounter"],
+  ["弘法にも筆の誤り", "kōbō ni mo fude no ayamari", "even the master's brush slips"],
+  ["終わり良ければ全て良し", "owari yokereba subete yoshi", "if the ending is good, everything is good"],
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Languages — extension map with TokyoNight-friendly colors + nerd icons
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -809,10 +846,28 @@ function cleanup() {
 
 function leave() {
   cleanup();
-  const r = state.repos.length;
-  console.log(
-    `${fg(T.magenta)}またね${RESET} — thanks for stopping by. ${r} plates served.`
+  const artW = ART[0].length;
+  const cols = out.columns || 80;
+  const center = (s) => " ".repeat(Math.max(0, Math.floor((artW - visW(s)) / 2)) + 2) + s;
+  const lines = [""];
+  if (cols >= artW + 4) {
+    // the logo one last time, frozen wherever the neon happened to be
+    for (let row = 0; row < ART.length; row++)
+      lines.push("  " + gradientLine(ART[row], row * 0.07 + state.phase) + RESET);
+    lines.push("");
+  }
+  const [jp, romaji, en] = SAYINGS[Math.floor(Math.random() * SAYINGS.length)];
+  lines.push(center(`${BOLD}${fg(T.fg)}「${jp}」${RESET}`));
+  lines.push(center(`${ITAL}${fg(T.fgDim)}${romaji} — ${en}${RESET}`));
+  lines.push("");
+  lines.push(
+    center(
+      `${fg(T.magenta)}またね${RESET}${fg(T.fgDim)} — thanks for stopping by. ` +
+        `${state.repos.length} plates served.${RESET}`
+    )
   );
+  lines.push("");
+  console.log(lines.join("\n"));
   process.exit(0);
 }
 

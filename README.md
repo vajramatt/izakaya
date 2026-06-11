@@ -38,7 +38,7 @@ npm link   # → izakaya
 | `e` | open the repo in `$EDITOR` (vim by default) in a new terminal window |
 | `c` | start a Claude Code session at the repo in a new terminal window |
 | `r` | rescan |
-| `q` | leave the bar (またね) |
+| `q` | leave the bar — the logo and a parting kotowaza stay in your scrollback (またね) |
 
 The menu also marks plates that need attention: `●` uncommitted changes,
 `⇡` commits you haven't pushed.
