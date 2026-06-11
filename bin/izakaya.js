@@ -839,7 +839,13 @@ function die(msg) {
   process.exit(1);
 }
 
+let cleaned = false;
 function cleanup() {
+  // runs from leave() AND the process exit handler — emitting ?1049l twice
+  // makes the terminal re-restore the saved cursor and the shell prompt then
+  // overwrites the farewell, so only ever do this once
+  if (cleaned) return;
+  cleaned = true;
   out.write("\x1b[?1049l\x1b[?25h");
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
 }
