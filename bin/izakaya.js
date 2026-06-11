@@ -65,6 +65,9 @@ const G = {
   folder: "",
   file: "",
   term: "",
+  edit: "",
+  claude: "✳",
+  search: "",
   warn: "",
   ok: "",
   lantern: "🏮",
@@ -397,7 +400,18 @@ const state = {
   status: "",
   splash: true,
   phase: 0,
+  filter: "",
+  filtering: false,
 };
+
+const visible = () =>
+  state.filter
+    ? state.repos.filter((r) => r.name.toLowerCase().includes(state.filter.toLowerCase()))
+    : state.repos;
+
+function clampSel() {
+  state.sel = Math.max(0, Math.min(visible().length - 1, state.sel));
+}
 
 const SPLASH_MIN_MS = 1600;
 const splashStart = Date.now();
@@ -430,12 +444,13 @@ const SORTS = {
 };
 
 function applySort() {
-  const cur = state.repos[state.sel]?.name;
+  const cur = visible()[state.sel]?.name;
   state.repos.sort(SORTS[state.sort]);
   if (cur) {
-    const i = state.repos.findIndex((r) => r.name === cur);
+    const i = visible().findIndex((r) => r.name === cur);
     if (i >= 0) state.sel = i;
   }
+  clampSel();
 }
 
 async function scanAll() {
@@ -520,21 +535,33 @@ function headerLine(W) {
 }
 
 function footerLine(W) {
+  let s = bg(T.bg) + " " + fg(T.green) + BOLD + "❯ " + RESET + bg(T.bg);
+  if (state.filtering || state.filter) {
+    s +=
+      fg(T.blue) + BOLD + G.search + " /" + RESET + bg(T.bg) +
+      fg(T.fg) + state.filter +
+      (state.filtering ? fg(T.cyan) + "▌" : "") +
+      "   " + fg(T.fgDim) + `${visible().length} match` +
+      (state.filtering ? "  ·  enter keep · esc clear" : "  ·  esc clear");
+    return padW(truncW(s, W), W) + RESET;
+  }
   const keys = [
     ["j/k", "browse"],
+    ["/", "filter"],
     ["o", "open"],
-    ["t", "terminal"],
+    ["t", "term"],
+    ["e", "edit"],
+    ["c", "claude"],
     ["s", `sort:${state.sort}`],
     ["r", "rescan"],
-    ["q", "leave the bar"],
+    ["q", "leave"],
   ];
-  let s = bg(T.bg) + " " + fg(T.green) + BOLD + "❯ " + RESET + bg(T.bg);
   for (const [k, label] of keys)
     s +=
       bg(T.seg3) + fg(T.seg1) + BOLD + ` ${k} ` + RESET +
       bg(T.bg) + fg(T.fgDim) + ` ${label}  `;
   if (state.status) s += fg(T.teal) + ITAL + state.status + RESET + bg(T.bg);
-  return padW(s, W) + RESET;
+  return padW(truncW(s, W), W) + RESET;
 }
 
 function listRow(repo, selected, W) {
@@ -549,8 +576,10 @@ function listRow(repo, selected, W) {
     : repo.dirty > 0
       ? fg(T.yellow) + G.dot
       : fg(T.green) + G.ok;
+  // unpushed work is the most actionable fact on the menu — surface it
+  const aheadMark = repo.isGit && repo.ahead > 0 ? fg(T.cyan) + G.ahead : "";
   const age = fg(T.fgDim) + relTime(repo.lastUnix);
-  const right = `${dirtyMark} ${age}`;
+  const right = `${dirtyMark}${aheadMark} ${age}`;
   const rightW = visW(right);
   let left = `${accent}${base} ${icon} ${nameC}${base}${repo.name}${RESET}${base}`;
   left = truncW(left, W - rightW - 2) + base;
@@ -637,6 +666,7 @@ function detailLines(repo, W, H) {
   const barW = Math.min(W - 6, 44);
   pad(`  ${langBar(repo, barW)}`);
   const legend = repo.langs
+    .filter((l) => l.pct >= 1)
     .map((l) => `${fg(l.color)}${G.dot}${fg(T.fgDim)} ${l.name} ${Math.round(l.pct)}%`)
     .join("  ");
   pad(`  ${legend || fg(T.fgFaint) + "nothing on this plate yet"}`);
@@ -732,18 +762,21 @@ function render() {
   lines.push(headerLine(W));
   lines.push(bg(T.bg) + " ".repeat(W) + RESET);
 
-  const sel = state.repos[state.sel];
+  const vis = visible();
+  const sel = vis[state.sel];
   const detail = sel
     ? detailLines(sel, W - listW - 1, bodyH)
     : state.scanning
       ? ["", `  ${fg(T.fgDim)}${ITAL}warming the sake…`]
-      : ["", `  ${fg(T.fgDim)}empty bar — no repos found in ${ROOT}`];
+      : state.filter
+        ? ["", `  ${fg(T.fgDim)}nothing on the menu matches “${state.filter}”`]
+        : ["", `  ${fg(T.fgDim)}empty bar — no repos found in ${ROOT}`];
 
   for (let i = 0; i < bodyH; i++) {
     const idx = state.scroll + i;
     const left =
-      idx < state.repos.length
-        ? listRow(state.repos[idx], idx === state.sel, listW)
+      idx < vis.length
+        ? listRow(vis[idx], idx === state.sel, listW)
         : bg(T.bgPanel) + " ".repeat(listW) + RESET;
     const rawRight = detail[i] ?? "";
     const rightW = W - listW - 1;
@@ -784,17 +817,59 @@ function leave() {
 }
 
 function move(d) {
-  if (!state.repos.length) return;
-  state.sel = Math.max(0, Math.min(state.repos.length - 1, state.sel + d));
+  if (!visible().length) return;
+  state.sel = Math.max(0, Math.min(visible().length - 1, state.sel + d));
   render();
 }
 
 function onKey(buf) {
   const k = buf.toString();
-  if (k === "q" || k === "\x03" || k === "\x1b" && buf.length === 1) return leave();
+  if (k === "\x03") return leave();
   if (state.splash) {
     // any other key skips the splash
     return endSplash();
+  }
+
+  if (state.filtering) {
+    if (k === "\x1b" && buf.length === 1) {
+      state.filtering = false;
+      state.filter = "";
+      clampSel();
+      return render();
+    }
+    if (k === "\r" || k === "\n") {
+      state.filtering = false;
+      return render();
+    }
+    if (k === "\x7f" || k === "\b") {
+      state.filter = state.filter.slice(0, -1);
+      clampSel();
+      return render();
+    }
+    if (k === "\x1b[B") return move(1);
+    if (k === "\x1b[A") return move(-1);
+    if (buf.length === 1 && k >= " " && k <= "~") {
+      state.filter += k;
+      state.sel = 0;
+      return render();
+    }
+    return;
+  }
+
+  if (k === "q") return leave();
+  if (k === "\x1b" && buf.length === 1) {
+    if (state.filter) {
+      state.filter = "";
+      clampSel();
+      return render();
+    }
+    return leave();
+  }
+  if (k === "/") {
+    state.filtering = true;
+    state.filter = "";
+    state.sel = 0;
+    return render();
   }
   if (k === "j" || k === "\x1b[B") return move(1);
   if (k === "k" || k === "\x1b[A") return move(-1);
@@ -809,19 +884,24 @@ function onKey(buf) {
     state.status = "";
     return void scanAll();
   }
+
+  const sel = visible()[state.sel];
+  if (!sel) return;
   if (k === "o") {
-    const sel = state.repos[state.sel];
-    if (sel) {
-      spawn("open", [sel.dir], { detached: true, stdio: "ignore" }).unref();
-      flash(`${G.folder} opened ${sel.name}`);
-    }
+    spawn("open", [sel.dir], { detached: true, stdio: "ignore" }).unref();
+    flash(`${G.folder} opened ${sel.name}`);
   }
   if (k === "t") {
-    const sel = state.repos[state.sel];
-    if (sel) {
-      void openTerminal(sel.dir);
-      flash(`${G.term} pulled up a stool at ${sel.name}`);
-    }
+    void openGhosttyWindow(sel.dir);
+    flash(`${G.term} pulled up a stool at ${sel.name}`);
+  }
+  if (k === "e") {
+    void openGhosttyWindow(sel.dir, "/bin/zsh -lc 'exec ${EDITOR:-vim} .'");
+    flash(`${G.edit} editing ${sel.name}`);
+  }
+  if (k === "c") {
+    void openGhosttyWindow(sel.dir, "/bin/zsh -lc 'exec claude'");
+    flash(`${G.claude} claude is at the bar — ${sel.name}`);
   }
 }
 
@@ -833,16 +913,20 @@ function flash(msg) {
   flashTimer = setTimeout(() => { state.status = ""; render(); }, 2000);
 }
 
-async function openTerminal(dir) {
+async function openGhosttyWindow(dir, cmd) {
   // A running Ghostty ignores `open --args`, so use its AppleScript interface
   // (Ghostty ≥1.3). Raw event codes from Ghostty.sdef — the terminology form
-  // doesn't compile under osascript.
-  const script = `tell application "Ghostty"
-  set cfg to «event GhstNSCf»
-  set «class GScD» of cfg to ${JSON.stringify(dir)}
-  «event GhstNWin» given «class GNwS»:cfg
-  activate
-end tell`;
+  // doesn't compile under osascript. GScD = initial working directory,
+  // GScC = command to run instead of the shell.
+  const script = [
+    'tell application "Ghostty"',
+    "  set cfg to «event GhstNSCf»",
+    `  set «class GScD» of cfg to ${JSON.stringify(dir)}`,
+    ...(cmd ? [`  set «class GScC» of cfg to ${JSON.stringify(cmd)}`] : []),
+    "  «event GhstNWin» given «class GNwS»:cfg",
+    "  activate",
+    "end tell",
+  ].join("\n");
   try {
     await fs.access("/Applications/Ghostty.app");
     await execFile("osascript", ["-e", script], { timeout: 5000 });
