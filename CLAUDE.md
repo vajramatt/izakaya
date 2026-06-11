@@ -18,8 +18,13 @@ and presents them as the menu at a small Tokyo bar.
   またね. New copy should keep the bar voice without getting in the way of
   the data.
 - **Read-only by design.** izakaya never mutates the repos it scans. The only
-  side effects allowed are `o` (open in Finder) and `t` (spawn a terminal
-  window at the repo — Ghostty first, Terminal.app fallback).
+  side effects allowed are launches: `o` (Finder), `t` (terminal window at the
+  repo), `e` (editor), `c` (Claude Code) — all via Ghostty's AppleScript
+  interface, Terminal.app fallback.
+- **The demo bar is fake on purpose.** `scripts/demo.sh` stages
+  `/tmp/izakaya-demo` with invented repos so recordings (`docs/demo.tape`,
+  rendered with vhs) never show anyone's real projects. Re-record with
+  `./scripts/demo.sh && vhs docs/demo.tape`.
 
 ## Layout
 
