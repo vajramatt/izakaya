@@ -1,0 +1,14 @@
+{
+  "name": "izakaya",
+  "version": "0.1.0",
+  "description": "居酒屋 — a cozy TokyoNight TUI where your repos are the menu",
+  "type": "module",
+  "bin": {
+    "izakaya": "bin/izakaya.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "author": "Matt Williamson <mattw.usmc@gmail.com>",
+  "license": "MIT"
+}
