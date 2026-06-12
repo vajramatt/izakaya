@@ -282,6 +282,10 @@ function fmtBytes(n) {
 
 const ROOT = path.resolve(process.argv[2] || path.join(os.homedir(), "code"));
 
+// IZAKAYA_DEMO=1 keeps the o/t/e/c flashes but skips the real launches —
+// used by docs/demo.tape so recording the GIF doesn't spawn windows.
+const DEMO = !!process.env.IZAKAYA_DEMO;
+
 async function git(cwd, ...args) {
   try {
     const { stdout } = await execFile("git", args, { cwd, timeout: 5000 });
@@ -617,6 +621,12 @@ function headerLine(W) {
 
 function footerLine(W) {
   let s = bg(T.bg) + " " + fg(T.green) + BOLD + "❯ " + RESET + bg(T.bg);
+  if (state.status) {
+    // a flash owns the whole line — appended after the key chips it just
+    // gets truncated off the right edge at most terminal widths
+    s += fg(T.teal) + ITAL + state.status;
+    return padW(truncW(s, W), W) + RESET;
+  }
   if (state.filtering || state.filter) {
     s +=
       fg(T.blue) + BOLD + G.search + " /" + RESET + bg(T.bg) +
@@ -641,7 +651,6 @@ function footerLine(W) {
     s +=
       bg(T.seg3) + fg(T.seg1) + BOLD + ` ${k} ` + RESET +
       bg(T.bg) + fg(T.fgDim) + ` ${label}  `;
-  if (state.status) s += fg(T.teal) + ITAL + state.status + RESET + bg(T.bg);
   return padW(truncW(s, W), W) + RESET;
 }
 
@@ -1066,19 +1075,19 @@ function onKey(buf) {
   const sel = visible()[state.sel];
   if (!sel) return;
   if (k === "o") {
-    spawn("open", [sel.dir], { detached: true, stdio: "ignore" }).unref();
+    if (!DEMO) spawn("open", [sel.dir], { detached: true, stdio: "ignore" }).unref();
     flash(`${G.folder} opened ${sel.name}`);
   }
   if (k === "t") {
-    void openGhosttyWindow(sel.dir);
+    if (!DEMO) void openGhosttyWindow(sel.dir);
     flash(`${G.term} pulled up a stool at ${sel.name}`);
   }
   if (k === "e") {
-    void openGhosttyWindow(sel.dir, "/bin/zsh -lc 'exec ${EDITOR:-vim} .'");
+    if (!DEMO) void openGhosttyWindow(sel.dir, "/bin/zsh -lc 'exec ${EDITOR:-vim} .'");
     flash(`${G.edit} editing ${sel.name}`);
   }
   if (k === "c") {
-    void openGhosttyWindow(sel.dir, "/bin/zsh -lc 'exec claude'");
+    if (!DEMO) void openGhosttyWindow(sel.dir, "/bin/zsh -lc 'exec claude'");
     flash(`${G.claude} claude is at the bar — ${sel.name}`);
   }
 }

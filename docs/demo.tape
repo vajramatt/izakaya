@@ -15,7 +15,7 @@ Set Padding 12
 Set Theme { "background": "#1a1b26", "foreground": "#c0caf5" }
 
 Hide
-Type "node bin/izakaya.js /tmp/izakaya-demo"
+Type "IZAKAYA_DEMO=1 node bin/izakaya.js /tmp/izakaya-demo"
 Show
 
 Enter
@@ -45,6 +45,13 @@ Type "s"
 Sleep 1s
 Type "g"
 Sleep 1.5s
+
+# crack the repo open: editor, then a claude session
+# (IZAKAYA_DEMO suppresses the real launches)
+Type "e"
+Sleep 1.8s
+Type "c"
+Sleep 2s
 
 # またね — the farewell scene plays, then auto-exits
 Type "q"
