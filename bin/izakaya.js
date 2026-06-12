@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 居酒屋 izakaya — a cozy little bar where your repos are the menu.
-// Zero-dependency TokyoNight TUI for everything living in ~/code.
+// Zero-dependency TokyoNight TUI for the repos in your code directory.
 
 import { promisify } from "node:util";
 import { execFile as execFileCb, spawn } from "node:child_process";
@@ -12,8 +12,8 @@ import os from "node:os";
 const execFile = promisify(execFileCb);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Theme — TokyoNight (Night) panes + the Starship segment colors from
-// ~/code/tokyo-night.toml so the header matches the prompt.
+// Theme — TokyoNight (Night) panes + the segment colors from the Starship
+// TokyoNight preset so the header reads like the prompt it sits above.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const T = {
@@ -55,6 +55,7 @@ const G = {
   sepL: "",
   sepThin: "",
   moon: "󰖔",
+  sun: "",
   pkg: "",
   dot: "●",
   clean: "",
@@ -76,6 +77,7 @@ const G = {
   ok: "",
   lantern: "🏮",
   sake: "",
+  copy: "",
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -313,11 +315,71 @@ function fmtBytes(n) {
 // Scanning
 // ─────────────────────────────────────────────────────────────────────────────
 
-const ROOT = path.resolve(process.argv[2] || path.join(os.homedir(), "code"));
+// The bar can stand anywhere: argument > $IZAKAYA_ROOT > the saved answer >
+// asking on the first visit. `w` moves it any time; the answer lives in
+// ~/.config/izakaya/config.json.
+const CONFIG_FILE = path.join(
+  process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"),
+  "izakaya",
+  "config.json"
+);
+
+function loadConfig() {
+  try {
+    return JSON.parse(fsSync.readFileSync(CONFIG_FILE, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function saveConfig(patch) {
+  try {
+    const cfg = { ...loadConfig(), ...patch };
+    fsSync.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
+    fsSync.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + "\n");
+  } catch {}
+}
+
+const expandHome = (p) =>
+  p === "~" ? os.homedir() : p.replace(/^~\//, os.homedir() + "/");
+
+const ARG_ROOT = process.argv[2] || process.env.IZAKAYA_ROOT || null;
+let ROOT = path.resolve(
+  expandHome(ARG_ROOT || loadConfig().root || path.join(os.homedir(), "code"))
+);
+// Nothing pointed the way and nothing is saved — ask before opening.
+const FIRST_VISIT = !ARG_ROOT && !loadConfig().root;
 
 // IZAKAYA_DEMO=1 keeps the o/t/e/c flashes but skips the real launches —
 // used by docs/demo.tape so recording the GIF doesn't spawn windows.
 const DEMO = !!process.env.IZAKAYA_DEMO;
+
+// Warm start: last visit's menu, keyed by root so the demo bar and the real
+// one never mix. The bar opens instantly on yesterday's plates while the
+// kitchen re-checks every one of them. The seat file is the cd target for
+// the iz() shell wrapper (see README) — written on ↵, eaten by the wrapper.
+const MENU_CACHE = path.join(os.homedir(), ".cache", "izakaya", "menu.json");
+const SEAT_FILE = path.join(os.homedir(), ".cache", "izakaya", "seat");
+
+function loadMenu() {
+  if (DEMO) return null;
+  try {
+    const repos = JSON.parse(fsSync.readFileSync(MENU_CACHE, "utf8"))[ROOT];
+    if (Array.isArray(repos) && repos.length) return repos;
+  } catch {}
+  return null;
+}
+
+function saveMenu() {
+  if (DEMO) return;
+  try {
+    let all = {};
+    try { all = JSON.parse(fsSync.readFileSync(MENU_CACHE, "utf8")); } catch {}
+    all[ROOT] = state.repos;
+    fsSync.mkdirSync(path.dirname(MENU_CACHE), { recursive: true });
+    fsSync.writeFileSync(MENU_CACHE, JSON.stringify(all));
+  } catch {}
+}
 
 async function git(cwd, ...args) {
   try {
@@ -518,21 +580,33 @@ const state = {
   phase: 0,
   filter: "",
   filtering: false,
+  dirtyOnly: false,
+  help: false,
+  detailScroll: 0,
+  asking: false, // the "where does the work live?" scene
+  askCancel: false, // esc returns to the bar (runtime `w`) vs first visit
+  rootInput: "",
+  askErr: "",
+  ambient: "", // the bar quietly lives when you've been idle a while
+  colophon: false,
   leaving: false,
   saying: null,
 };
 
-const visible = () =>
-  state.filter
-    ? state.repos.filter((r) => r.name.toLowerCase().includes(state.filter.toLowerCase()))
-    : state.repos;
+const visible = () => {
+  let rs = state.repos;
+  if (state.dirtyOnly) rs = rs.filter((r) => r.dirty > 0);
+  if (state.filter)
+    rs = rs.filter((r) => r.name.toLowerCase().includes(state.filter.toLowerCase()));
+  return rs;
+};
 
 function clampSel() {
   state.sel = Math.max(0, Math.min(visible().length - 1, state.sel));
 }
 
 const SPLASH_MIN_MS = 1600;
-const splashStart = Date.now();
+let splashStart = Date.now();
 
 // The neon flows while the curtain is up: tick the gradient phase ~20fps.
 const splashTimer = setInterval(() => {
@@ -542,11 +616,21 @@ const splashTimer = setInterval(() => {
   }
 }, 50);
 
+// The bar knows what hour it is.
+function greeting() {
+  const h = new Date().getHours();
+  if (h >= 5 && h < 11) return "おはよう — morning at the bar";
+  if (h < 17) return "いらっしゃいませ — welcome in";
+  if (h < 23) return "こんばんは — evening at the bar";
+  return "もう遅いね — last call, friend";
+}
+
 function endSplash() {
   if (!state.splash) return;
   state.splash = false;
   clearInterval(splashTimer);
-  flash("いらっしゃいませ — welcome in");
+  startSweep();
+  flash(greeting());
 }
 
 // Drop the curtain once the first scan is done and the logo has had its moment.
@@ -573,9 +657,13 @@ function applySort() {
 
 async function scanAll() {
   state.scanning = true;
-  state.repos = [];
-  state.sel = 0;
-  state.scroll = 0;
+  // Warm starts keep the cached menu on screen and refresh plates in place;
+  // cold starts (and the very first run) build it from nothing.
+  const warm = state.repos.length > 0;
+  if (!warm) {
+    state.sel = 0;
+    state.scroll = 0;
+  }
   render();
   let entries;
   try {
@@ -586,13 +674,21 @@ async function scanAll() {
   const dirs = entries.filter((e) => e.isDirectory() && !e.name.startsWith("."));
   state.toScan = dirs.length;
   state.scanned = 0;
+  if (warm) {
+    // plates that left the menu since last visit come off the board now
+    const onMenu = new Set(dirs.map((d) => d.name));
+    state.repos = state.repos.filter((r) => onMenu.has(r.name));
+    applySort();
+  }
   // Scan with mild concurrency, render as plates arrive.
   const queue = [...dirs];
   const workers = Array.from({ length: 4 }, async () => {
     while (queue.length) {
       const d = queue.shift();
       const repo = await scanRepo(d);
-      state.repos.push(repo);
+      const i = state.repos.findIndex((r) => r.name === repo.name);
+      if (i >= 0) state.repos[i] = repo;
+      else state.repos.push(repo);
       state.scanned++;
       applySort();
       render();
@@ -601,8 +697,38 @@ async function scanAll() {
   await Promise.all(workers);
   state.scanning = false;
   applySort();
+  saveMenu();
   maybeEndSplash();
   render();
+}
+
+// Move the bar to a new street: validate the path, remember the choice, and
+// re-open on whatever menu was cached there. Returns an error string for the
+// ask scene, or null on success.
+function moveBar(input) {
+  const raw = (input || "").trim();
+  if (!raw) return "tell me where the work lives";
+  const p = path.resolve(expandHome(raw));
+  let st;
+  try {
+    st = fsSync.statSync(p);
+  } catch {
+    return `no such place — ${p}`;
+  }
+  if (!st.isDirectory()) return "that's a file, not a neighborhood";
+  ROOT = p;
+  if (!DEMO) saveConfig({ root: raw });
+  state.repos = loadMenu() || [];
+  if (state.repos.length && state.splash) maybeEndSplash();
+  state.sel = 0;
+  state.scroll = 0;
+  state.detailScroll = 0;
+  state.filter = "";
+  state.filtering = false;
+  state.dirtyOnly = false;
+  applySort();
+  void scanAll();
+  return null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -638,13 +764,15 @@ function headerLine(W) {
     ` ${dirtyCount ? `${G.dot} ${dirtyCount} dirty` : `${G.ok} all clean`} `;
   s += RESET + bg(T.bg) + fg(T.seg4) + G.sep;
 
-  // mirrored right side, like a starship right-prompt: time → moon → ▓▒░
+  // mirrored right side, like a starship right-prompt: time → sky → ▓▒░
   const time = new Date().toTimeString().slice(0, 5);
+  const hour = new Date().getHours();
+  const sky = hour >= 6 && hour < 18 ? G.sun : G.moon;
   const right =
     fg(T.seg2) + G.sepL +
     bg(T.seg2) + fg(T.segDim) + ` ${G.clock} ${time} ` +
     fg(T.seg0) + G.sepL +
-    bg(T.seg0) + fg("#090c0c") + ` ${G.moon} ` +
+    bg(T.seg0) + fg("#090c0c") + ` ${sky} ` +
     RESET + bg(T.bg) + fg(T.seg0) + "▓▒░";
 
   const gap = W - visW(s) - visW(right);
@@ -660,6 +788,11 @@ function footerLine(W) {
     s += fg(T.teal) + ITAL + state.status;
     return padW(truncW(s, W), W) + RESET;
   }
+  if (state.ambient) {
+    const puff = ambientTick % 2 ? "▒" : "░";
+    s += fg(T.fgFaint) + puff + " " + fg(T.fgDim) + ITAL + state.ambient;
+    return padW(truncW(s, W), W) + RESET;
+  }
   if (state.filtering || state.filter) {
     s +=
       fg(T.blue) + BOLD + G.search + " /" + RESET + bg(T.bg) +
@@ -669,15 +802,19 @@ function footerLine(W) {
       (state.filtering ? "  ·  enter keep · esc clear" : "  ·  esc clear");
     return padW(truncW(s, W), W) + RESET;
   }
+  if (state.dirtyOnly)
+    s += bg(T.seg3) + fg(T.yellow) + ` ${G.dot} dirty only ` + RESET + bg(T.bg) + "  ";
   const keys = [
     ["j/k", "browse"],
     ["/", "filter"],
+    ["↵", "sit"],
     ["o", "open"],
     ["t", "term"],
     ["e", "edit"],
     ["c", "claude"],
     ["s", `sort:${state.sort}`],
-    ["r", "rescan"],
+    ["?", "more"],
+    ["~", "colophon"],
     ["q", "leave"],
   ];
   for (const [k, label] of keys)
@@ -687,18 +824,24 @@ function footerLine(W) {
   return padW(truncW(s, W), W) + RESET;
 }
 
+const STALE_S = 180 * 86400; // half a year untouched and the plate gathers dust
+
 function listRow(repo, selected, W) {
   const base = selected ? bg(T.bgHi) : bg(T.bgPanel);
   const accent = selected ? fg(T.blue) + "▌" : fg(T.bgPanel) + " ";
   const icon = repo.langs[0]
     ? fg(repo.langs[0].color) + repo.langs[0].icon
     : fg(T.fgFaint) + G.folder;
-  const nameC = selected ? fg(T.fg) + BOLD : fg(T.fg);
+  const stale =
+    repo.isGit && repo.lastUnix > 0 && Date.now() / 1000 - repo.lastUnix > STALE_S;
+  const nameC = selected ? fg(T.fg) + BOLD : stale ? fg(T.fgDim) : fg(T.fg);
   const dirtyMark = !repo.isGit
     ? fg(T.fgFaint) + "·"
     : repo.dirty > 0
       ? fg(T.yellow) + G.dot
-      : fg(T.green) + G.ok;
+      : stale
+        ? fg(T.fgFaint) + G.moon
+        : fg(T.green) + G.ok;
   // unpushed work is the most actionable fact on the menu — surface it
   const aheadMark = repo.isGit && repo.ahead > 0 ? fg(T.cyan) + G.ahead : "";
   const age = fg(T.fgDim) + relTime(repo.lastUnix);
@@ -725,7 +868,7 @@ function langBar(repo, width) {
   return s;
 }
 
-function detailLines(repo, W, H) {
+function detailLines(repo, W) {
   const L = [];
   const pad = (s = "") => L.push(s);
   const rule = (label) =>
@@ -857,7 +1000,7 @@ function detailLines(repo, W, H) {
     pad(`  ${fg(T.fgDim)}${ITAL}“${truncW(repo.readmeTitle, W - 10)}${fg(T.fgDim)}${ITAL}”`);
   }
 
-  return L.slice(0, H);
+  return L;
 }
 
 function splashFrame(W, H) {
@@ -874,6 +1017,11 @@ function splashFrame(W, H) {
   } else {
     body.push(center(BOLD + fg(T.magenta) + "🏮 居酒屋 izakaya") + RESET);
   }
+  body.push(blank);
+  // where the bar stands tonight
+  body.push(
+    center(fg(T.seg1) + `${G.folder} ${ROOT.replace(os.homedir(), "~")}`) + RESET
+  );
   body.push(blank);
 
   // the pour: a gradient bar that fills as plates come out of the kitchen
@@ -937,8 +1085,161 @@ function farewellFrame(W, H) {
 }
 
 // Full-width rule, like the lines Claude Code draws around its update box —
-// a thin orange thread that frames the room and gives the menu air.
-const hr = (W) => bg(T.bg) + fg(T.orange) + "─".repeat(W) + RESET;
+// a thin orange thread that frames the room and gives the menu air. When the
+// curtain drops, one gradient sweep runs the length of the rules — neon
+// catching the brass — then they settle to orange and stay put.
+const SWEEP_MS = 1200;
+let sweepStart = 0;
+
+function startSweep() {
+  sweepStart = Date.now();
+  const tm = setInterval(() => {
+    if (Date.now() - sweepStart >= SWEEP_MS) {
+      clearInterval(tm);
+      sweepStart = 0;
+    }
+    render();
+  }, 50);
+}
+
+function hr(W) {
+  if (!sweepStart) return bg(T.bg) + fg(T.orange) + "─".repeat(W) + RESET;
+  const head = Math.floor(((Date.now() - sweepStart) / SWEEP_MS) * (W + 16));
+  let s = bg(T.bg);
+  for (let i = 0; i < W; i++) {
+    const d = head - i;
+    if (d < 0) s += fg(T.fgFaint) + "─";
+    else if (d < 16) s += gradColor(d / 32) + "─";
+    else s += fg(T.orange) + "─";
+  }
+  return s + RESET;
+}
+
+// "Where does the work live?" — first visit, and whenever `w` moves the bar.
+function askFrame(W, H) {
+  const center = (s) =>
+    bg(T.bg) + " ".repeat(Math.max(0, Math.floor((W - visW(s)) / 2))) + s;
+  const blank = bg(T.bg) + " ".repeat(W) + RESET;
+
+  const body = [];
+  if (W >= ART[0].length + 2 && H >= ART.length + 10) {
+    for (let row = 0; row < ART.length; row++)
+      body.push(center(gradientLine(ART[row], row * 0.07 + state.phase)) + RESET);
+    body.push(blank);
+  }
+  body.push(center(BOLD + fg(T.fg) + "どこで働く？ — where does the work live?") + RESET);
+  body.push(blank);
+  body.push(
+    center(
+      fg(T.green) + BOLD + "❯ " + RESET + bg(T.bg) +
+        fg(T.fg) + state.rootInput + fg(T.cyan) + "▌"
+    ) + RESET
+  );
+  body.push(blank);
+  body.push(
+    center(
+      fg(T.fgFaint) +
+        (state.askCancel
+          ? `enter moves the bar · esc stays at ${ROOT.replace(os.homedir(), "~")}`
+          : "a directory full of repos — enter to open the bar")
+    ) + RESET
+  );
+  if (state.askErr) {
+    body.push(blank);
+    body.push(center(fg(T.red) + `${G.warn} ${state.askErr}`) + RESET);
+  }
+
+  const top = Math.max(0, Math.floor((H - body.length) / 2));
+  const lines = [];
+  for (let i = 0; i < H; i++) {
+    const b = body[i - top];
+    lines.push(b ? padW(b + bg(T.bg), W) + RESET : blank);
+  }
+  return lines;
+}
+
+// The back page of the menu — every key, including the ones the footer
+// doesn't have room for.
+function helpFrame(W, H) {
+  const center = (s) =>
+    bg(T.bg) + " ".repeat(Math.max(0, Math.floor((W - visW(s)) / 2))) + s;
+  const blank = bg(T.bg) + " ".repeat(W) + RESET;
+
+  const rows = [
+    ["j / k", "browse the menu (arrows work too)"],
+    ["g / G", "first / last plate"],
+    ["J / K", "scroll the plate's details"],
+    ["/", "filter — enter keeps it, esc clears it"],
+    ["d", "dirty plates only — show unfinished work"],
+    ["enter", "sit down — the iz() wrapper cd's you there"],
+    ["o", "open in Finder"],
+    ["t", "terminal window at the repo"],
+    ["e", "$EDITOR at the repo"],
+    ["c", "claude code at the repo"],
+    ["b", "open the remote in the browser"],
+    ["y", "copy the repo path"],
+    ["w", "move the bar — scan a different directory"],
+    ["s", "sort: recent · name · size"],
+    ["r", "rescan the kitchen"],
+    ["~", "colophon — who keeps this bar"],
+    ["q / esc", "またね"],
+  ];
+  const keyW = 8;
+  const descW = Math.max(...rows.map(([, d]) => visW(d)));
+  const body = [];
+  body.push(center(fg(T.seg1) + BOLD + `${G.lantern} the back page of the menu`) + RESET);
+  body.push(blank);
+  for (const [k, desc] of rows)
+    body.push(
+      center(
+        fg(T.orange) + BOLD + padW(k, keyW) + RESET + bg(T.bg) +
+          fg(T.fgDim) + " " + padW(desc, descW)
+      ) + RESET
+    );
+  body.push(blank);
+  body.push(center(fg(T.fgFaint) + "( any key )") + RESET);
+
+  const top = Math.max(0, Math.floor((H - body.length) / 2));
+  const lines = [];
+  for (let i = 0; i < H; i++) {
+    const b = body[i - top];
+    lines.push(b ? padW(b + bg(T.bg), W) + RESET : blank);
+  }
+  return lines;
+}
+
+// Colophon — who keeps this bar, and why. Same spirit as stillpoint's:
+// a quiet page, a small story, a signature.
+function colophonFrame(W, H) {
+  const center = (s) =>
+    bg(T.bg) + " ".repeat(Math.max(0, Math.floor((W - visW(s)) / 2))) + s;
+  const blank = bg(T.bg) + " ".repeat(W) + RESET;
+
+  const body = [];
+  body.push(center(fg(T.seg1) + BOLD + `${G.lantern} colophon — who keeps this bar`) + RESET);
+  body.push(blank);
+  body.push(center(fg(T.fg) + "izakaya started as a question: what if the projects") + RESET);
+  body.push(center(fg(T.fg) + "folder felt less like a filing cabinet and more like a place?") + RESET);
+  body.push(blank);
+  body.push(center(fg(T.fgDim) + "one file, zero dependencies, raw ANSI — a small TokyoNight") + RESET);
+  body.push(center(fg(T.fgDim) + "bar where the repos are the menu and the commits are pours.") + RESET);
+  body.push(blank);
+  body.push(center(fg(T.fgDim) + ITAL + "a sibling of stillpoint: sitting quietly, then building quiet things.") + RESET);
+  body.push(blank);
+  body.push(center(fg(T.cyan) + "stillpoint.guru" + RESET + bg(T.bg) + fg(T.fgFaint) + "  ·  " + fg(T.cyan) + "crossinginto.ai" + RESET + bg(T.bg) + fg(T.fgFaint) + "  ·  " + fg(T.cyan) + "hologramthoughts.com") + RESET);
+  body.push(blank);
+  body.push(center(fg(T.fgDim) + "🙏 matt williamson") + RESET);
+  body.push(blank);
+  body.push(center(fg(T.fgFaint) + "( any key )") + RESET);
+
+  const top = Math.max(0, Math.floor((H - body.length) / 2));
+  const lines = [];
+  for (let i = 0; i < H; i++) {
+    const b = body[i - top];
+    lines.push(b ? padW(b + bg(T.bg), W) + RESET : blank);
+  }
+  return lines;
+}
 
 function render() {
   const W = out.columns || 80;
@@ -949,8 +1250,23 @@ function render() {
     return;
   }
 
+  if (state.asking) {
+    out.write("\x1b[H" + askFrame(W, H).join("\r\n"));
+    return;
+  }
+
   if (state.splash) {
     out.write("\x1b[H" + splashFrame(W, H).join("\r\n"));
+    return;
+  }
+
+  if (state.help) {
+    out.write("\x1b[H" + helpFrame(W, H).join("\r\n"));
+    return;
+  }
+
+  if (state.colophon) {
+    out.write("\x1b[H" + colophonFrame(W, H).join("\r\n"));
     return;
   }
   const listW = Math.max(26, Math.min(38, Math.floor(W * 0.34)));
@@ -966,13 +1282,18 @@ function render() {
 
   const vis = visible();
   const sel = vis[state.sel];
-  const detail = sel
-    ? detailLines(sel, W - listW - 1, bodyH)
+  const detailAll = sel
+    ? detailLines(sel, W - listW - 1)
     : state.scanning
       ? ["", `  ${fg(T.fgDim)}${ITAL}warming the sake…`]
       : state.filter
         ? ["", `  ${fg(T.fgDim)}nothing on the menu matches “${state.filter}”`]
         : ["", `  ${fg(T.fgDim)}empty bar — no repos found in ${ROOT}`];
+  // J/K scroll a plate whose details run past a short terminal
+  state.detailScroll = Math.max(
+    0, Math.min(state.detailScroll, detailAll.length - bodyH)
+  );
+  const detail = detailAll.slice(state.detailScroll);
 
   for (let i = 0; i < bodyH; i++) {
     const idx = state.scroll + i;
@@ -1043,16 +1364,67 @@ function reallyLeave() {
 function move(d) {
   if (!visible().length) return;
   state.sel = Math.max(0, Math.min(visible().length - 1, state.sel + d));
+  state.detailScroll = 0;
   render();
 }
 
 function onKey(buf) {
   const k = buf.toString();
+  lastInput = Date.now();
+  state.ambient = "";
   if (state.leaving) return reallyLeave();
   if (k === "\x03") return reallyLeave();
+
+  // pasted (or pipe-coalesced) input lands as one chunk — replay it per
+  // char so a path dropped into the ask scene or the filter isn't lost.
+  // escape sequences (arrows etc.) start with \x1b and pass through whole.
+  if (buf.length > 1 && k[0] !== "\x1b") {
+    for (const ch of k) onKey(Buffer.from(ch));
+    return;
+  }
+
+  if (state.asking) {
+    if (k === "\r" || k === "\n") {
+      const err = moveBar(state.rootInput);
+      if (err) {
+        state.askErr = err;
+        return render();
+      }
+      state.asking = false;
+      state.askErr = "";
+      splashStart = Date.now(); // the logo gets its moment over the fresh pour
+      return render();
+    }
+    if (k === "\x1b" && buf.length === 1) {
+      if (!state.askCancel) return; // first visit — the bar needs an address
+      state.asking = false;
+      state.askErr = "";
+      return render();
+    }
+    if (k === "\x7f" || k === "\b") {
+      state.rootInput = state.rootInput.slice(0, -1);
+      return render();
+    }
+    if (buf.length === 1 && k >= " " && k <= "~") {
+      state.rootInput += k;
+      return render();
+    }
+    return;
+  }
+
   if (state.splash) {
     // any other key skips the splash
     return endSplash();
+  }
+
+  if (state.help) {
+    state.help = false;
+    return render();
+  }
+
+  if (state.colophon) {
+    state.colophon = false;
+    return render();
   }
 
   if (state.filtering) {
@@ -1088,6 +1460,11 @@ function onKey(buf) {
       clampSel();
       return render();
     }
+    if (state.dirtyOnly) {
+      state.dirtyOnly = false;
+      clampSel();
+      return render();
+    }
     return leave();
   }
   if (k === "/") {
@@ -1100,6 +1477,39 @@ function onKey(buf) {
   if (k === "k" || k === "\x1b[A") return move(-1);
   if (k === "g") return move(-Infinity);
   if (k === "G") return move(Infinity);
+  if (k === "J") {
+    state.detailScroll++; // clamped against the pane in render
+    return render();
+  }
+  if (k === "K") {
+    state.detailScroll = Math.max(0, state.detailScroll - 1);
+    return render();
+  }
+  if (k === "?") {
+    state.help = true;
+    return render();
+  }
+  if (k === "~") {
+    state.colophon = true;
+    return render();
+  }
+  if (k === "d") {
+    state.dirtyOnly = !state.dirtyOnly;
+    state.sel = 0;
+    state.scroll = 0;
+    state.detailScroll = 0;
+    clampSel();
+    return flash(
+      state.dirtyOnly ? `${G.dot} dirty plates only` : `${G.ok} the full menu`
+    );
+  }
+  if (k === "w") {
+    state.asking = true;
+    state.askCancel = true;
+    state.askErr = "";
+    state.rootInput = ROOT.replace(os.homedir(), "~");
+    return render();
+  }
   if (k === "s") {
     state.sort = state.sort === "recent" ? "name" : state.sort === "name" ? "size" : "recent";
     applySort();
@@ -1128,6 +1538,28 @@ function onKey(buf) {
     if (!DEMO) void openGhosttyWindow(sel.dir, "/bin/zsh -lc 'exec claude'");
     flash(`${G.claude} claude is at the bar — ${sel.name}`);
   }
+  if (k === "\r" || k === "\n") {
+    // sit down: leave the seat for the iz() wrapper to cd into (see README)
+    if (!DEMO)
+      try {
+        fsSync.mkdirSync(path.dirname(SEAT_FILE), { recursive: true });
+        fsSync.writeFileSync(SEAT_FILE, sel.dir);
+      } catch {}
+    return leave();
+  }
+  if (k === "b") {
+    if (!sel.remote) return flash(`${G.remote} no remote — house brew only`);
+    if (!DEMO)
+      spawn("open", [`https://${sel.remote}`], { detached: true, stdio: "ignore" }).unref();
+    flash(`${G.remote} browsing ${sel.remote}`);
+  }
+  if (k === "y") {
+    if (!DEMO) {
+      const pb = spawn("pbcopy", [], { stdio: ["pipe", "ignore", "ignore"] });
+      pb.stdin.end(sel.dir);
+    }
+    flash(`${G.copy} path on a coaster — ${sel.dir.replace(os.homedir(), "~")}`);
+  }
 }
 
 let flashTimer;
@@ -1137,6 +1569,42 @@ function flash(msg) {
   clearTimeout(flashTimer);
   flashTimer = setTimeout(() => { state.status = ""; render(); }, 2000);
 }
+
+// ── Ambience ─────────────────────────────────────────────────────────────
+// Leave the bar alone for half a minute and it quietly lives: a soft line
+// in the footer, steam drifting, the line changing now and then. Any key
+// snaps it back to business.
+const AMBIENCE = [
+  "the master wipes a glass",
+  "steam curls off the kettle",
+  "the lantern sways a little",
+  "chopsticks click at the far table",
+  "the radio hums an old song",
+  "someone laughs in the kitchen",
+  "the noren flutters in the doorway",
+];
+const IDLE_MS = 30_000;
+let lastInput = Date.now();
+let ambientTick = 0;
+
+setInterval(() => {
+  if (
+    state.splash || state.leaving || state.asking ||
+    state.help || state.colophon || state.filtering || state.status
+  )
+    return;
+  if (Date.now() - lastInput < IDLE_MS) {
+    if (state.ambient) {
+      state.ambient = "";
+      render();
+    }
+    return;
+  }
+  ambientTick++;
+  if (!state.ambient || ambientTick % 14 === 0)
+    state.ambient = AMBIENCE[Math.floor(Math.random() * AMBIENCE.length)];
+  render();
+}, 1000);
 
 async function openGhosttyWindow(dir, cmd) {
   // A running Ghostty ignores `open --args`, so use its AppleScript interface
@@ -1175,4 +1643,20 @@ process.on("SIGINT", reallyLeave);
 process.on("SIGTERM", reallyLeave);
 process.on("exit", cleanup);
 
-scanAll();
+// a seat left over from a crashed visit would teleport the iz() wrapper
+try { fsSync.unlinkSync(SEAT_FILE); } catch {}
+
+if (FIRST_VISIT && !DEMO) {
+  state.asking = true;
+  state.askCancel = false;
+  state.rootInput = "~/code";
+  render();
+} else {
+  const cached = loadMenu();
+  if (cached) {
+    state.repos = cached;
+    applySort();
+    maybeEndSplash(); // yesterday's menu is already out — don't hold the curtain
+  }
+  scanAll();
+}
