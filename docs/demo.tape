@@ -46,6 +46,22 @@ Sleep 1s
 Type "g"
 Sleep 1.5s
 
+# the back page of the menu, then just the dirty plates
+Type "?"
+Sleep 2.5s
+Type "?"
+Sleep 800ms
+Type "d"
+Sleep 2s
+Type "d"
+Sleep 1s
+
+# the colophon — who keeps this bar
+Type "~"
+Sleep 2.5s
+Type "~"
+Sleep 800ms
+
 # crack the repo open: editor, then a claude session
 # (IZAKAYA_DEMO suppresses the real launches)
 Type "e"
