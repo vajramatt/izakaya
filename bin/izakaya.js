@@ -5,6 +5,7 @@
 import { promisify } from "node:util";
 import { execFile as execFileCb, spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
@@ -151,6 +152,38 @@ const SAYINGS = [
   ["弘法にも筆の誤り", "kōbō ni mo fude no ayamari", "even the master's brush slips"],
   ["終わり良ければ全て良し", "owari yokereba subete yoshi", "if the ending is good, everything is good"],
 ];
+
+// Deal sayings from a persistent shuffled deck instead of rolling dice —
+// independent random draws repeat fast (birthday problem), so you'd hear
+// "gold coins to a cat" three nights in a row. The cursor lives in ~/.cache.
+const SAYING_DECK = path.join(os.homedir(), ".cache", "izakaya", "sayings.json");
+
+function pickSaying() {
+  let deck = null;
+  try {
+    deck = JSON.parse(fsSync.readFileSync(SAYING_DECK, "utf8"));
+  } catch {}
+  const stale =
+    !deck || !Array.isArray(deck.order) ||
+    deck.order.length !== SAYINGS.length || !(deck.next >= 0);
+  if (stale || deck.next >= SAYINGS.length) {
+    const last = deck?.order?.[SAYINGS.length - 1];
+    const order = [...SAYINGS.keys()];
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    // don't let a fresh shuffle open with the saying that just closed the last
+    if (order[0] === last) [order[0], order[1]] = [order[1], order[0]];
+    deck = { order, next: 0 };
+  }
+  const idx = deck.order[deck.next++];
+  try {
+    fsSync.mkdirSync(path.dirname(SAYING_DECK), { recursive: true });
+    fsSync.writeFileSync(SAYING_DECK, JSON.stringify(deck));
+  } catch {}
+  return SAYINGS[idx];
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Languages — extension map with TokyoNight-friendly colors + nerd icons
@@ -985,7 +1018,7 @@ function leave() {
   state.leaving = true;
   state.splash = false;
   clearInterval(splashTimer);
-  state.saying = SAYINGS[Math.floor(Math.random() * SAYINGS.length)];
+  state.saying = pickSaying();
   setInterval(() => {
     state.phase += 0.016;
     render();
