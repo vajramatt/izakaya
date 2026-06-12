@@ -1226,6 +1226,8 @@ function colophonFrame(W, H) {
   body.push(blank);
   body.push(center(fg(T.fgDim) + ITAL + "a sibling of stillpoint: sitting quietly, then building quiet things.") + RESET);
   body.push(blank);
+  body.push(center(fg(T.cyan) + `${G.remote} github.com/vajramatt/izakaya`) + RESET);
+  body.push(blank);
   body.push(center(fg(T.cyan) + "stillpoint.guru" + RESET + bg(T.bg) + fg(T.fgFaint) + "  ·  " + fg(T.cyan) + "crossinginto.ai" + RESET + bg(T.bg) + fg(T.fgFaint) + "  ·  " + fg(T.cyan) + "hologramthoughts.com") + RESET);
   body.push(blank);
   body.push(center(fg(T.fgDim) + "🙏 matt williamson") + RESET);
