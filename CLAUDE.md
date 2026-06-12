@@ -20,7 +20,8 @@ and presents them as the menu at a small Tokyo bar.
 - **Read-only by design.** izakaya never mutates the repos it scans. The only
   side effects allowed are launches: `o` (Finder), `t` (terminal window at the
   repo), `e` (editor), `c` (Claude Code) — all via Ghostty's AppleScript
-  interface, Terminal.app fallback.
+  interface, Terminal.app fallback — plus one cache file
+  (`~/.cache/izakaya/sayings.json`, the kotowaza deck cursor).
 - **The demo bar is fake on purpose.** `scripts/demo.sh` stages
   `/tmp/izakaya-demo` with invented repos so recordings (`docs/demo.tape`,
   rendered with vhs) never show anyone's real projects. Re-record with
