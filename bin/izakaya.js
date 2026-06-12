@@ -1630,7 +1630,7 @@ async function openGhosttyWindow(dir, cmd) {
   }
 }
 
-if (!process.stdout.isTTY) {
+if (!process.stdout.isTTY || !process.stdin.isTTY) {
   console.error("izakaya needs a TTY — come sit at the bar.");
   process.exit(1);
 }
