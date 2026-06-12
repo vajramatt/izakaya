@@ -936,6 +936,10 @@ function farewellFrame(W, H) {
   return lines;
 }
 
+// Full-width rule, like the lines Claude Code draws around its update box —
+// a thin orange thread that frames the room and gives the menu air.
+const hr = (W) => bg(T.bg) + fg(T.orange) + "─".repeat(W) + RESET;
+
 function render() {
   const W = out.columns || 80;
   const H = out.rows || 24;
@@ -950,7 +954,7 @@ function render() {
     return;
   }
   const listW = Math.max(26, Math.min(38, Math.floor(W * 0.34)));
-  const bodyH = H - 3; // header, blank, footer
+  const bodyH = H - 4; // header, rule, rule, footer
 
   // keep selection visible
   if (state.sel < state.scroll) state.scroll = state.sel;
@@ -958,7 +962,7 @@ function render() {
 
   const lines = [];
   lines.push(headerLine(W));
-  lines.push(bg(T.bg) + " ".repeat(W) + RESET);
+  lines.push(hr(W));
 
   const vis = visible();
   const sel = vis[state.sel];
@@ -986,6 +990,7 @@ function render() {
     lines.push(left + divider + right);
   }
 
+  lines.push(hr(W));
   lines.push(footerLine(W));
   out.write("\x1b[H" + lines.join("\r\n"));
 }
