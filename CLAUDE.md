@@ -20,14 +20,23 @@ menu at a small Tokyo bar.
   またね. New copy should keep the bar voice without getting in the way of
   the data.
 - **Read-only by design.** izakaya never mutates the repos it scans. The only
-  side effects allowed are launches: `o` (Finder), `t` (terminal window at the
-  repo), `e` (editor), `c` (Claude Code), `b` (remote in browser) — all via
-  Ghostty's AppleScript interface, Terminal.app fallback — plus `y` (pbcopy)
-  and its own housekeeping files: `~/.config/izakaya/config.json` (the saved
-  root), and in `~/.cache/izakaya/` — `sayings.json` (kotowaza deck cursor),
-  `menu.json` (warm-start menu, keyed by root), `seat` (the `↵` cd target the
-  `iz()` shell wrapper consumes). Root resolution: CLI arg > `$IZAKAYA_ROOT` >
-  saved config > ask on first visit.
+  side effects allowed are launches: `o` (file manager), `t` (terminal window
+  at the repo), `e` (editor), `c` (Claude Code), `b` (remote in browser), `y`
+  (clipboard) — plus its own housekeeping files: `~/.config/izakaya/config.json`
+  (the saved root, and an optional Linux `terminal` override), and in
+  `~/.cache/izakaya/` — `sayings.json` (kotowaza deck cursor), `menu.json`
+  (warm-start menu, keyed by root), `seat` (the `↵` cd target the `iz()` shell
+  wrapper consumes). Root resolution: CLI arg > `$IZAKAYA_ROOT` > saved config
+  > ask on first visit.
+- **The launch keys are the only platform-aware code, and they live in one
+  place.** All OS dispatch is in the `Platform` section (`isMac`/`isLinux`,
+  `openPath`/`openUrl`/`copyText`/`openTerminal`) — no `process.platform`
+  checks scattered through the handlers. macOS is the reference build: `open`,
+  `pbcopy`, Ghostty via AppleScript → Terminal.app fallback, unchanged. Linux
+  is parity where it's cheap (`xdg-open`; `wl-copy`/`xclip`/`xsel`) and
+  graceful degradation where it isn't (terminal detection: override >
+  kitty > wezterm > alacritty > foot > `$TERMINAL`, then a hint). New launch
+  behavior goes through those primitives, and missing tools hint, never crash.
 - **The demo bar is fake on purpose.** `scripts/demo.sh` stages
   `/tmp/izakaya-demo` with invented repos so recordings (`docs/demo.tape`,
   rendered with vhs) never show anyone's real projects. Re-record with

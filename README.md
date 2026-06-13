@@ -50,8 +50,8 @@ Repeat visits open instantly on the last menu (cached per root in
 | `d` | dirty plates only — just the repos with unfinished work |
 | `s` | cycle sort: recent → name → size |
 | `↵` | sit down — leave, and the `iz()` wrapper cd's you into the repo |
-| `o` | open the repo in Finder |
-| `t` | new terminal window at the repo (Ghostty, falls back to Terminal.app) |
+| `o` | open the repo in the file manager |
+| `t` | new terminal window at the repo |
 | `e` | open the repo in `$EDITOR` (vim by default) in a new terminal window |
 | `c` | start a Claude Code session at the repo in a new terminal window |
 | `b` | open the repo's remote in the browser |
@@ -65,6 +65,36 @@ Repeat visits open instantly on the last menu (cached per root in
 The menu marks plates that need attention: `●` uncommitted changes, `⇡`
 commits you haven't pushed, and a small moon on plates untouched for half
 a year.
+
+### The launch keys, across platforms
+
+Browsing the menu works anywhere Node does. The launch keys (`o` `t` `e` `c`
+`b` `y`) reach out to the OS, so how far they go depends on where you sit:
+
+- **`o` open · `b` browser · `y` copy** — full parity on **macOS and Linux**.
+  macOS uses `open` and `pbcopy`; Linux uses `xdg-open`, and for the clipboard
+  `wl-copy` (Wayland), `xclip`, or `xsel` — whichever you have installed.
+- **`t` terminal · `e` editor · `c` claude** — spawn a new terminal window.
+  - **macOS** drives Ghostty over AppleScript, falling back to Terminal.app.
+  - **Linux** has no standard terminal, so izakaya looks for one in order:
+    **kitty → wezterm → alacritty → foot**. To use anything else (or to force
+    a choice), set it yourself:
+
+    ```sh
+    export IZAKAYA_TERMINAL="kitty"      # env var, or…
+    ```
+    ```json
+    // ~/.config/izakaya/config.json
+    { "terminal": "kitty" }
+    ```
+
+    A known emulator's name gets the right flags automatically; anything else
+    is launched at the repo's directory on a best-effort basis. If no terminal
+    is found and none is configured, `t`/`e`/`c` say so and open the folder
+    instead.
+
+If a tool a key needs isn't installed, the key tells you what's missing rather
+than failing in silence.
 
 ## What's on a plate
 
@@ -114,7 +144,8 @@ once before any repeats.
 izakaya never writes to the repos it scans. The only files it touches are
 its own:
 
-- `~/.config/izakaya/config.json` — where your work lives
+- `~/.config/izakaya/config.json` — where your work lives (and, on Linux,
+  an optional `terminal` override)
 - `~/.cache/izakaya/menu.json` — the warm-start menu, keyed by root
 - `~/.cache/izakaya/sayings.json` — the kotowaza deck's cursor
 - `~/.cache/izakaya/seat` — the `↵` cd target the `iz()` wrapper consumes
@@ -137,9 +168,12 @@ and `docs/demo.tape` replays the session with [vhs](https://github.com/charmbrac
 - Node ≥ 22
 - A nerd font (you're running Starship, you have one)
 - A terminal with truecolor (Ghostty, kitty, iTerm2, …)
-- macOS for the launch keys (`o` `t` `e` `c` `b` `y` lean on Finder,
-  Ghostty/Terminal.app via AppleScript, and pbcopy) — browsing the menu
-  works anywhere Node does
+- **Browsing** works on any platform Node runs on. The **launch keys** go
+  furthest on macOS and Linux: `o`/`b`/`y` work on both; terminal spawning
+  (`t`/`e`/`c`) works with Ghostty/Terminal.app on macOS, and with kitty,
+  wezterm, alacritty, or foot on Linux — or any terminal you point
+  `IZAKAYA_TERMINAL` / the `terminal` config field at. See
+  [the launch keys, across platforms](#the-launch-keys-across-platforms).
 
 No dependencies. No build step. One file.
 
