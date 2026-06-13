@@ -14,6 +14,31 @@ the rest of the terminal it lives in. One file, no packages, no build step.
 
 **Pull up a stool → [izakaya.guru](https://izakaya.guru)**
 
+## Install
+
+The whole app is one zero-dependency file, so installing is really just putting
+it on your `PATH`. The installer does that — and offers to add the `iz()` shell
+wrapper:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/vajramatt/izakaya/main/scripts/install.sh | sh
+```
+
+It drops `izakaya` into `$XDG_BIN_HOME` (or `~/.local/bin`), warns if that's
+not on your `PATH`, and checks for **Node ≥ 22** — required, since the file
+runs on your system Node rather than shipping as a compiled binary. Prefer to
+read before you run? [`scripts/install.sh`](scripts/install.sh) is short and
+only ever writes to a bin dir and (with your yes) your shell rc.
+
+Or skip the installer and drop the single file yourself:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/vajramatt/izakaya/main/bin/izakaya.js \
+  -o ~/.local/bin/izakaya && chmod +x ~/.local/bin/izakaya
+```
+
+Both work on **macOS and Linux**. (Windows is on the [roadmap](ROADMAP.md).)
+
 ## Run
 
 ```sh
@@ -130,6 +155,18 @@ iz() {
 ```
 
 Browse, press `↵`, and you're standing in the repo.
+
+For **fish**, the same idea in fish syntax (`~/.config/fish/config.fish`):
+
+```fish
+function iz
+    izakaya $argv
+    set -l seat "$HOME/.cache/izakaya/seat"
+    if test -f "$seat"
+        cd (cat "$seat"); and command rm -f -- "$seat"
+    end
+end
+```
 
 ## Atmosphere
 
