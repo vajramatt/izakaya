@@ -477,6 +477,8 @@ async function scanRepo(dirent) {
     repo.commits = parseInt(count || "0", 10) || 0;
     if (remote) {
       repo.remote = remote
+        // never surface an embedded user:token@ credential (e.g. an https PAT)
+        .replace(/\/\/[^/@]+@/, "//")
         .replace(/^git@([^:]+):/, "$1/")
         .replace(/^https?:\/\//, "")
         .replace(/\.git$/, "");
