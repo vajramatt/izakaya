@@ -12,6 +12,8 @@ rules (`CLAUDE.md`).
 The header is styled after the Starship TokyoNight prompt, so it looks like
 the rest of the terminal it lives in. One file, no packages, no build step.
 
+**Pull up a stool → [izakaya.guru](https://izakaya.guru)**
+
 ## Run
 
 ```sh
