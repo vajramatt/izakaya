@@ -1239,7 +1239,7 @@ function helpFrame(W, H) {
     ["/", "filter — enter keeps it, esc clears it"],
     ["d", "dirty plates only — show unfinished work"],
     ["enter", "sit down — the iz() wrapper cd's you there"],
-    ["o", "open in Finder"],
+    ["o", "open in the file manager"],
     ["t", "terminal window at the repo"],
     ["e", "$EDITOR at the repo"],
     ["c", "claude code at the repo"],
@@ -1592,21 +1592,12 @@ function onKey(buf) {
   const sel = visible()[state.sel];
   if (!sel) return;
   if (k === "o") {
-    if (!DEMO) spawn("open", [sel.dir], { detached: true, stdio: "ignore" }).unref();
-    flash(`${G.folder} opened ${sel.name}`);
+    if (DEMO || openPath(sel.dir)) flash(`${G.folder} opened ${sel.name}`);
+    else flash(`${G.folder} no opener — install xdg-utils (xdg-open)`);
   }
-  if (k === "t") {
-    if (!DEMO) void openGhosttyWindow(sel.dir);
-    flash(`${G.term} pulled up a stool at ${sel.name}`);
-  }
-  if (k === "e") {
-    if (!DEMO) void openGhosttyWindow(sel.dir, "/bin/zsh -lc 'exec ${EDITOR:-vim} .'");
-    flash(`${G.edit} editing ${sel.name}`);
-  }
-  if (k === "c") {
-    if (!DEMO) void openGhosttyWindow(sel.dir, "/bin/zsh -lc 'exec claude'");
-    flash(`${G.claude} claude is at the bar — ${sel.name}`);
-  }
+  if (k === "t") openAtRepo(sel, null, `${G.term} pulled up a stool at ${sel.name}`);
+  if (k === "e") openAtRepo(sel, "exec ${EDITOR:-vim} .", `${G.edit} editing ${sel.name}`);
+  if (k === "c") openAtRepo(sel, "exec claude", `${G.claude} claude is at the bar — ${sel.name}`);
   if (k === "\r" || k === "\n") {
     // sit down: leave the seat for the iz() wrapper to cd into (see README)
     if (!DEMO)
@@ -1618,17 +1609,23 @@ function onKey(buf) {
   }
   if (k === "b") {
     if (!sel.remote) return flash(`${G.remote} no remote — house brew only`);
-    if (!DEMO)
-      spawn("open", [`https://${sel.remote}`], { detached: true, stdio: "ignore" }).unref();
-    flash(`${G.remote} browsing ${sel.remote}`);
+    if (DEMO || openUrl(`https://${sel.remote}`)) flash(`${G.remote} browsing ${sel.remote}`);
+    else flash(`${G.remote} no opener — install xdg-utils (xdg-open)`);
   }
   if (k === "y") {
-    if (!DEMO) {
-      const pb = spawn("pbcopy", [], { stdio: ["pipe", "ignore", "ignore"] });
-      pb.stdin.end(sel.dir);
-    }
-    flash(`${G.copy} path on a coaster — ${sel.dir.replace(os.homedir(), "~")}`);
+    if (DEMO || copyText(sel.dir))
+      flash(`${G.copy} path on a coaster — ${sel.dir.replace(os.homedir(), "~")}`);
+    else flash(`${G.copy} no clipboard tool — install wl-clipboard, xclip, or xsel`);
   }
+}
+
+// t/e/c share the same shape: open a terminal at the repo, optionally running
+// `inner`. On Linux with no terminal found, say so and — since the keypress
+// shouldn't vanish — fall back to opening the folder.
+function openAtRepo(sel, inner, okMsg) {
+  if (DEMO || openTerminal(sel.dir, inner)) return flash(okMsg);
+  if (hasBin("xdg-open")) spawnDetached("xdg-open", [sel.dir]);
+  flash(`${G.term} no terminal — set $IZAKAYA_TERMINAL or terminal in config (README); opened folder`);
 }
 
 let flashTimer;
@@ -1674,6 +1671,139 @@ setInterval(() => {
     state.ambient = AMBIENCE[Math.floor(Math.random() * AMBIENCE.length)];
   render();
 }, 1000);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Platform — the launch keys (o t e c b y) are the only things that touch the
+// OS, so the OS lives here and nowhere else. Detect once; each primitive does
+// the right thing on mac and Linux, and degrades to a hint where a tool's
+// missing rather than crashing or no-op'ing silently. Mac is the reference
+// build — its path is byte-for-byte what it always was.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const isMac = process.platform === "darwin";
+const isLinux = process.platform === "linux";
+
+// `which`, zero-dep: walk $PATH looking for an executable. A name with a slash
+// is treated as a literal path.
+function hasBin(name) {
+  if (!name) return false;
+  if (name.includes("/")) {
+    try { fsSync.accessSync(name, fsSync.constants.X_OK); return true; } catch { return false; }
+  }
+  for (const d of (process.env.PATH || "").split(path.delimiter)) {
+    if (!d) continue;
+    try { fsSync.accessSync(path.join(d, name), fsSync.constants.X_OK); return true; } catch {}
+  }
+  return false;
+}
+
+// One detached launch. The error handler matters on Linux: spawning a missing
+// binary fires an async 'error' event that would otherwise crash the bar.
+function spawnDetached(bin, args, cwd) {
+  const opts = { detached: true, stdio: "ignore" };
+  if (cwd) opts.cwd = cwd;
+  const child = spawn(bin, args, opts);
+  child.on("error", () => {});
+  child.unref();
+}
+
+// o — reveal the repo in the file manager. Returns false if there's no opener.
+function openPath(dir) {
+  if (isMac) { spawnDetached("open", [dir]); return true; }
+  // TODO(linux): verify xdg-open lands the repo in the user's file manager.
+  if (hasBin("xdg-open")) { spawnDetached("xdg-open", [dir]); return true; }
+  return false;
+}
+
+// b — open the remote in the browser. Returns false if there's no opener.
+function openUrl(url) {
+  if (isMac) { spawnDetached("open", [url]); return true; }
+  // TODO(linux): verify xdg-open opens the URL in the default browser.
+  if (hasBin("xdg-open")) { spawnDetached("xdg-open", [url]); return true; }
+  return false;
+}
+
+// y — copy to the system clipboard. Returns false if no clipboard tool exists,
+// so the caller can hint instead of swallowing the keypress.
+function copyText(text) {
+  let bin, args;
+  if (isMac) {
+    bin = "pbcopy"; args = [];
+  } else {
+    // TODO(linux): verify each of these actually populates the clipboard —
+    // wl-copy under Wayland, xclip/xsel under X11.
+    if (process.env.WAYLAND_DISPLAY && hasBin("wl-copy")) { bin = "wl-copy"; args = []; }
+    else if (hasBin("xclip")) { bin = "xclip"; args = ["-selection", "clipboard"]; }
+    else if (hasBin("xsel")) { bin = "xsel"; args = ["--clipboard", "--input"]; }
+    else return false;
+  }
+  try {
+    const child = spawn(bin, args, { stdio: ["pipe", "ignore", "ignore"] });
+    child.on("error", () => {});
+    child.stdin.end(text);
+  } catch { return false; }
+  return true;
+}
+
+// Linux terminal emulators we know how to drive. Each turns (dir, prog[]) into
+// the emulator's argv tail — kitty/foot take the program positionally, wezterm
+// wants it after `--`, alacritty after `-e` (which must come last). Flags
+// verified against current docs (2026-06); they drift, so re-check on upgrade.
+const LINUX_TERMS = {
+  kitty:     (dir, prog) => ["--directory", dir, ...prog],
+  wezterm:   (dir, prog) => ["start", "--cwd", dir, ...(prog.length ? ["--", ...prog] : [])],
+  alacritty: (dir, prog) => ["--working-directory", dir, ...(prog.length ? ["-e", ...prog] : [])],
+  foot:      (dir, prog) => [`--working-directory=${dir}`, ...prog],
+};
+const LINUX_TERM_ORDER = ["kitty", "wezterm", "alacritty", "foot"];
+
+// Spawn `tokens` (a "kitty" / "/usr/bin/wezterm --flag" style string) as a
+// terminal at `dir` running `prog`. If the binary's basename is one we know,
+// use its flag profile; otherwise inherit the working directory via cwd and
+// just append the program — best effort for an emulator we can't speak to.
+function spawnTermTokens(tokens, dir, prog) {
+  const bin = tokens[0];
+  const extra = tokens.slice(1);
+  const profile = LINUX_TERMS[path.basename(bin)];
+  if (profile) spawnDetached(bin, [...extra, ...profile(dir, prog)]);
+  else spawnDetached(bin, [...extra, ...prog], dir);
+}
+
+// t/e/c on Linux: pick the first terminal we can find and open it at `dir`,
+// optionally running `inner` (a shell command line). Returns false if nothing
+// is available so the caller can point the user at the config.
+function spawnLinuxTerminal(dir, inner) {
+  // $SHELL -lc so the command sees the user's login environment ($EDITOR etc.),
+  // falling back to /bin/sh. A bare terminal (t) gets no program — the emulator
+  // opens the user's default shell.
+  const prog = inner ? [process.env.SHELL || "/bin/sh", "-lc", inner] : [];
+
+  // 1. explicit override — trust it even if hasBin can't see it (the user
+  //    knows their setup); a bad name just fails quietly via spawnDetached.
+  const override = (process.env.IZAKAYA_TERMINAL || loadConfig().terminal || "").trim();
+  if (override) { spawnTermTokens(override.split(/\s+/), dir, prog); return true; }
+
+  // 2–5. known emulators, in priority order
+  for (const name of LINUX_TERM_ORDER)
+    if (hasBin(name)) { spawnDetached(name, LINUX_TERMS[name](dir, prog)); return true; }
+
+  // 6. $TERMINAL, best effort
+  const envTerm = (process.env.TERMINAL || "").trim();
+  if (envTerm) { spawnTermTokens(envTerm.split(/\s+/), dir, prog); return true; }
+
+  return false;
+}
+
+// t/e/c — open a terminal at `dir`, optionally running shell command `inner`.
+// Mac is unchanged (Ghostty → Terminal.app), and always "succeeds" because of
+// its fallback; Linux returns false when no terminal could be found.
+function openTerminal(dir, inner) {
+  if (isMac) {
+    void openGhosttyWindow(dir, inner ? `/bin/zsh -lc '${inner}'` : undefined);
+    return true;
+  }
+  return spawnLinuxTerminal(dir, inner);
+}
 
 async function openGhosttyWindow(dir, cmd) {
   // A running Ghostty ignores `open --args`, so use its AppleScript interface
