@@ -436,6 +436,7 @@ async function scanRepo(dirent) {
     langs: [],
     chips: [],
     version: null,
+    ai: null,
     hasClaudeMd: false,
     readmeTitle: null,
     recent: [],
@@ -452,7 +453,7 @@ async function scanRepo(dirent) {
   } catch {}
 
   if (repo.isGit) {
-    const [branch, status, log, count, remote, ab, recent, activity, authors, branches, tags, stash] = await Promise.all([
+    const [branch, status, log, count, remote, ab, recent, activity, authors, branches, tags, stash, aiLog] = await Promise.all([
       git(dir, "rev-parse", "--abbrev-ref", "HEAD"),
       git(dir, "status", "--porcelain"),
       git(dir, "log", "-1", "--format=%s%x00%an%x00%ct"),
@@ -465,6 +466,8 @@ async function scanRepo(dirent) {
       git(dir, "branch", "--format=%(refname:short)"),
       git(dir, "tag"),
       git(dir, "stash", "list"),
+      // commit bodies, hash-keyed, to sniff AI co-author trailers
+      git(dir, "log", "--format=%H%x1f%b%x1e", "-n", "500"),
     ]);
     repo.branch = branch || "—";
     repo.dirty = status ? status.split("\n").filter(Boolean).length : 0;
@@ -510,6 +513,43 @@ async function scanRepo(dirent) {
     repo.branches = branches ? branches.split("\n").filter(Boolean).length : 0;
     repo.tags = tags ? tags.split("\n").filter(Boolean).length : 0;
     repo.stash = stash ? stash.split("\n").filter(Boolean).length : 0;
+
+    // Who else was behind the bar — Claude Code stamps the model on every
+    // pour it helps with: `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
+    // Tally how many of the recent pours carry that mark, and which models.
+    if (aiLog) {
+      const counts = new Map();
+      let total = 0, assisted = 0;
+      for (const rec of aiLog.split("\x1e")) {
+        const cut = rec.indexOf("\x1f");
+        if (cut < 0) continue; // trailing split artifact / non-commit chaff
+        total++;
+        const body = rec.slice(cut + 1);
+        const seen = new Set(); // one commit can name a model more than once
+        for (const line of body.split("\n")) {
+          if (!/co-?authored-by:/i.test(line)) continue;
+          if (!/claude|anthropic/i.test(line)) continue;
+          const m = line.match(/Claude(?:\s+(Opus|Sonnet|Haiku|Fable)\s+([\d.]+))?/i);
+          seen.add(
+            m && m[1]
+              ? `${m[1][0].toUpperCase()}${m[1].slice(1).toLowerCase()} ${m[2]}`
+              : "Claude"
+          );
+        }
+        if (seen.size) {
+          assisted++;
+          for (const label of seen) counts.set(label, (counts.get(label) || 0) + 1);
+        }
+      }
+      if (assisted > 0)
+        repo.ai = {
+          models: [...counts.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .map(([label, count]) => ({ label, count })),
+          assisted,
+          total,
+        };
+    }
   }
 
   const acc = { files: 0, bytes: 0, langs: {} };
@@ -988,6 +1028,31 @@ function detailLines(repo, W) {
           .map((c) => bg(T.bgHi) + fg(c.color) + ` ${c.label} ` + RESET)
           .join(" ")
     );
+  }
+
+  if (repo.ai) {
+    const a = repo.ai;
+    const pct = a.total ? Math.round((a.assisted / a.total) * 100) : 0;
+    pad();
+    pad(rule("the hand behind the bar"));
+    pad(
+      `  ${fg(T.magenta)}${G.claude} ${fg(T.fg)}Claude${fg(T.fgDim)} had a hand in ` +
+        `${fg(T.fg)}${pct}%${fg(T.fgDim)} of the last ${a.total} ` +
+        `${a.total === 1 ? "pour" : "pours"}  ${fg(T.fgFaint)}(${a.assisted} ` +
+        `commit${a.assisted === 1 ? "" : "s"})`
+    );
+    const shown = a.models.slice(0, 4);
+    const extra = a.models.length - shown.length;
+    let tags = shown
+      .map(
+        (m) =>
+          bg(T.bgHi) + fg(T.magenta) + ` ${m.label} ` +
+          (m.count > 1 ? fg(T.fgFaint) + `${m.count} ` : "") + RESET
+      )
+      .join(" ");
+    if (extra > 0) tags += " " + fg(T.fgFaint) + `+${extra} more`;
+    pad();
+    pad("  " + tags);
   }
 
   pad();
