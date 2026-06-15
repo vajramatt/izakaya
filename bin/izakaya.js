@@ -58,7 +58,6 @@ const G = {
   sun: "",
   pkg: "",
   dot: "●",
-  clean: "",
   ahead: "⇡",
   behind: "⇣",
   commit: "",
@@ -792,14 +791,6 @@ function moveBar(input) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const out = process.stdout;
-
-function seg(text, fgC, bgC, nextBg) {
-  // one powerline segment + separator into the next background
-  return (
-    bg(bgC) + fg(fgC) + ` ${text} ` +
-    (nextBg ? bg(nextBg) + fg(bgC) + G.sep : RESET + fg(bgC) + G.sep + RESET)
-  );
-}
 
 function headerLine(W) {
   const home = ROOT.replace(os.homedir(), "~");
