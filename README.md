@@ -69,6 +69,8 @@ Repeat visits open instantly on the last menu (cached per root in
 | key | what |
 | --- | --- |
 | `j` / `k` / arrows | browse the menu |
+| `→` / `←` | step behind the bar / back out front — `→` walks into the open tab |
+| `↑` / `↓` | behind the bar: move file-by-file down the open tab |
 | `g` / `G` | first / last plate |
 | `J` / `K` | scroll the selected plate's details |
 | `/` | filter the menu (type to narrow, enter keeps, esc clears) |
@@ -127,6 +129,10 @@ Select a repo and the right panel fills in:
 
 - a powerline status ribbon — branch, clean/dirty, ahead/behind, version —
   shaped like the Starship prompt it sits under
+- **the open tab** — the uncommitted changes, file by file and colored by
+  status (modified, added, deleted, renamed, untracked), staged marked. Press
+  `→` to step behind the bar and walk the tab with `↑`/`↓`; the file you're on
+  glows orange
 - **the last pour** and the few before it: recent commits with ages
 - **the kitchen** — a 12-week sparkline of commit activity, the chefs who
   cook here, and the shelf: branches, tags, stashes

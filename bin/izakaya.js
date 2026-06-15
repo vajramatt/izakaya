@@ -384,7 +384,9 @@ function saveMenu() {
 async function git(cwd, ...args) {
   try {
     const { stdout } = await execFile("git", args, { cwd, timeout: 5000 });
-    return stdout.trim();
+    // trailing only — `status --porcelain` carries a leading status column
+    // (e.g. " M file" for an unstaged change) that a full trim() would eat
+    return stdout.replace(/\s+$/, "");
   } catch {
     return null;
   }
@@ -424,6 +426,7 @@ async function scanRepo(dirent) {
     isGit: false,
     branch: null,
     dirty: 0,
+    changes: [],
     ahead: 0,
     behind: 0,
     commits: 0,
@@ -471,6 +474,15 @@ async function scanRepo(dirent) {
     ]);
     repo.branch = branch || "—";
     repo.dirty = status ? status.split("\n").filter(Boolean).length : 0;
+    // keep the porcelain itself — the open tab lists what's still unsettled.
+    // XY: index status, worktree status, then a space, then the path. Capped
+    // so a runaway working tree can't bloat the cached menu.
+    if (status)
+      repo.changes = status
+        .split("\n")
+        .filter(Boolean)
+        .slice(0, 200)
+        .map((l) => ({ xy: l.slice(0, 2), path: l.slice(3) }));
     if (log) {
       const [msg, author, ct] = log.split("\0");
       repo.lastMsg = msg;
@@ -624,6 +636,8 @@ const state = {
   filtering: false,
   dirtyOnly: false,
   help: false,
+  focus: "menu", // "menu" browses the board | "board" steps behind the bar
+  boardSel: 0, // which file on the open tab the cursor is standing on
   detailScroll: 0,
   asking: false, // the "where does the work live?" scene
   askCancel: false, // esc returns to the bar (runtime `w`) vs first visit
@@ -846,19 +860,30 @@ function footerLine(W) {
   }
   if (state.dirtyOnly)
     s += bg(T.seg3) + fg(T.yellow) + ` ${G.dot} dirty only ` + RESET + bg(T.bg) + "  ";
-  const keys = [
-    ["j/k", "browse"],
-    ["/", "filter"],
-    ["↵", "sit"],
-    ["o", "open"],
-    ["t", "term"],
-    ["e", "edit"],
-    ["c", "claude"],
-    ["s", `sort:${state.sort}`],
-    ["?", "more"],
-    ["~", "colophon"],
-    ["q", "leave"],
-  ];
+  const keys = state.focus === "board"
+    ? [
+        ["↑/↓", "pick a file"],
+        ["←", "back to menu"],
+        ["↵", "sit"],
+        ["e", "edit"],
+        ["c", "claude"],
+        ["?", "more"],
+        ["q", "leave"],
+      ]
+    : [
+        ["j/k", "browse"],
+        ["→", "examine"],
+        ["/", "filter"],
+        ["↵", "sit"],
+        ["o", "open"],
+        ["t", "term"],
+        ["e", "edit"],
+        ["c", "claude"],
+        ["s", `sort:${state.sort}`],
+        ["?", "more"],
+        ["~", "colophon"],
+        ["q", "leave"],
+      ];
   for (const [k, label] of keys)
     s +=
       bg(T.seg3) + fg(T.seg1) + BOLD + ` ${k} ` + RESET +
@@ -870,7 +895,11 @@ const STALE_S = 180 * 86400; // half a year untouched and the plate gathers dust
 
 function listRow(repo, selected, W) {
   const base = selected ? bg(T.bgHi) : bg(T.bgPanel);
-  const accent = selected ? fg(T.blue) + "▌" : fg(T.bgPanel) + " ";
+  // the accent stays blue while you browse the menu; behind the bar it dims,
+  // and the divider lights up instead — so it's always clear which pane is live
+  const accent = selected
+    ? (state.focus === "menu" ? fg(T.blue) : fg(T.fgDim)) + "▌"
+    : fg(T.bgPanel) + " ";
   const icon = repo.langs[0]
     ? fg(repo.langs[0].color) + repo.langs[0].icon
     : fg(T.fgFaint) + G.folder;
@@ -910,8 +939,32 @@ function langBar(repo, width) {
   return s;
 }
 
-function detailLines(repo, W) {
+const OPEN_TAB_SHOWN = 12; // files listed on the tab before "+N more"
+
+// The open tab — a git status XY code becomes a glyph, a color, and a word.
+// Position 0 is the index (staged), position 1 the worktree (unstaged); the
+// worktree side wins the color when both are dirty.
+const CHANGE_KINDS = {
+  M: { color: T.yellow, glyph: G.dot, label: "modified" },
+  A: { color: T.green, glyph: "+", label: "added" },
+  D: { color: T.red, glyph: "−", label: "deleted" },
+  R: { color: T.cyan, glyph: "→", label: "renamed" },
+  C: { color: T.cyan, glyph: "→", label: "copied" },
+  T: { color: T.magenta, glyph: G.dot, label: "typechange" },
+  U: { color: T.red, glyph: G.warn, label: "conflict" },
+  "?": { color: T.fgFaint, glyph: "?", label: "untracked" },
+};
+function changeMark(xy) {
+  const x = xy[0], y = xy[1];
+  const kind =
+    CHANGE_KINDS[y !== " " ? y : x] ||
+    { color: T.fgDim, glyph: G.dot, label: "changed" };
+  return { ...kind, staged: x !== " " && x !== "?" };
+}
+
+function detailLines(repo, W, focusIdx = -1) {
   const L = [];
+  const changeRows = []; // line index in L of each open-tab file, for the cursor
   const pad = (s = "") => L.push(s);
   const rule = (label) =>
     `  ${fg(T.fgFaint)}─ ${fg(T.fgDim)}${label} ${fg(T.fgFaint)}${"─".repeat(Math.max(0, W - visW(label) - 7))}`;
@@ -975,6 +1028,50 @@ function detailLines(repo, W) {
         ? `  ${fg(T.fgDim)}${G.remote} ${fg(T.cyan)}${repo.remote}`
         : `  ${fg(T.fgDim)}${G.remote} ${fg(T.fgFaint)}no remote — house brew only`
     );
+
+    if (repo.changes && repo.changes.length) {
+      pad();
+      pad(rule("the open tab"));
+      const tally = new Map();
+      for (const ch of repo.changes) {
+        const { label } = changeMark(ch.xy);
+        tally.set(label, (tally.get(label) || 0) + 1);
+      }
+      const summary = [...tally.entries()].map(([l, n]) => `${n} ${l}`).join("  ·  ");
+      pad(
+        `  ${fg(T.yellow)}${G.dot} ${fg(T.fg)}${repo.dirty}${fg(T.fgDim)} unsettled` +
+          `  ${fg(T.fgFaint)}${truncW(summary, W - 18)}`
+      );
+      let ci = 0;
+      for (const ch of repo.changes.slice(0, OPEN_TAB_SHOWN)) {
+        const m = changeMark(ch.xy);
+        // a rename reads "old -> new"; the new name is what's on the tab now
+        const arrow = ch.path.indexOf(" -> ");
+        const p = arrow >= 0 ? ch.path.slice(arrow + 4) : ch.path;
+        const suffix = `${m.label}${m.staged ? " · staged" : ""}`;
+        changeRows.push(L.length);
+        if (ci === focusIdx) {
+          // behind the bar, the file you're standing on glows orange, the
+          // whole row filled like the menu's own selection
+          pad(
+            padW(
+              bg(T.bgHi) + fg(T.orange) + "▌ " + fg(m.color) + m.glyph + " " +
+                fg(T.orange) + BOLD + truncW(p, W - 18) + RESET + bg(T.bgHi) +
+                fg(T.fgDim) + "  " + suffix,
+              W
+            )
+          );
+        } else {
+          pad(
+            `  ${fg(m.color)}${m.glyph} ${fg(T.fg)}${truncW(p, W - 18)}` +
+              `${fg(T.fgFaint)}  ${suffix}`
+          );
+        }
+        ci++;
+      }
+      if (repo.changes.length > OPEN_TAB_SHOWN)
+        pad(`  ${fg(T.fgFaint)}+${repo.changes.length - OPEN_TAB_SHOWN} more on the tab`);
+    }
 
     pad();
     pad(rule("the kitchen"));
@@ -1067,7 +1164,7 @@ function detailLines(repo, W) {
     pad(`  ${fg(T.fgDim)}${ITAL}“${truncW(repo.readmeTitle, W - 10)}${fg(T.fgDim)}${ITAL}”`);
   }
 
-  return L;
+  return { lines: L, changeRows };
 }
 
 function splashFrame(W, H) {
@@ -1234,6 +1331,8 @@ function helpFrame(W, H) {
 
   const rows = [
     ["j / k", "browse the menu (arrows work too)"],
+    ["→ / ←", "step behind the bar / back out front"],
+    ["↑ / ↓", "behind the bar: walk the open tab, file by file"],
     ["g / G", "first / last plate"],
     ["J / K", "scroll the plate's details"],
     ["/", "filter — enter keeps it, esc clears it"],
@@ -1351,13 +1450,25 @@ function render() {
 
   const vis = visible();
   const sel = vis[state.sel];
-  const detailAll = sel
-    ? detailLines(sel, W - listW - 1)
-    : state.scanning
-      ? ["", `  ${fg(T.fgDim)}${ITAL}warming the sake…`]
-      : state.filter
-        ? ["", `  ${fg(T.fgDim)}nothing on the menu matches “${state.filter}”`]
-        : ["", `  ${fg(T.fgDim)}empty bar — no repos found in ${ROOT}`];
+  const focusIdx =
+    state.focus === "board" && sel?.changes?.length ? state.boardSel : -1;
+  const board = sel
+    ? detailLines(sel, W - listW - 1, focusIdx)
+    : {
+        lines: state.scanning
+          ? ["", `  ${fg(T.fgDim)}${ITAL}warming the sake…`]
+          : state.filter
+            ? ["", `  ${fg(T.fgDim)}nothing on the menu matches “${state.filter}”`]
+            : ["", `  ${fg(T.fgDim)}empty bar — no repos found in ${ROOT}`],
+        changeRows: [],
+      };
+  const detailAll = board.lines;
+  // behind the bar, scroll the board so the focused file stays in view
+  if (focusIdx >= 0 && board.changeRows[focusIdx] != null) {
+    const row = board.changeRows[focusIdx];
+    if (row < state.detailScroll) state.detailScroll = row;
+    if (row >= state.detailScroll + bodyH) state.detailScroll = row - bodyH + 1;
+  }
   // J/K scroll a plate whose details run past a short terminal
   state.detailScroll = Math.max(
     0, Math.min(state.detailScroll, detailAll.length - bodyH)
@@ -1376,7 +1487,10 @@ function render() {
     const right =
       bg(T.bg) + truncated + RESET + bg(T.bg) +
       " ".repeat(Math.max(0, rightW - visW(truncated))) + RESET;
-    const divider = bg(T.bg) + fg(T.fgFaint) + "│" + RESET;
+    const divider =
+      bg(T.bg) +
+      (state.focus === "board" ? fg(T.blue) + BOLD : fg(T.fgFaint)) +
+      "│" + RESET;
     lines.push(left + divider + right);
   }
 
@@ -1432,8 +1546,31 @@ function reallyLeave() {
 
 function move(d) {
   if (!visible().length) return;
+  state.focus = "menu"; // a new plate is a fresh read — come back out front
   state.sel = Math.max(0, Math.min(visible().length - 1, state.sel + d));
   state.detailScroll = 0;
+  render();
+}
+
+// Behind the bar, up/down read down the board; the upper bound is clamped
+// against the pane height in render().
+function scrollBoard(d) {
+  state.detailScroll = Math.max(0, state.detailScroll + d);
+  render();
+}
+
+// How many files the cursor can land on behind the bar (capped like the list).
+function boardItems() {
+  const repo = visible()[state.sel];
+  return Math.min(OPEN_TAB_SHOWN, repo?.changes?.length || 0);
+}
+
+// Walk the cursor up/down the open tab. With nothing on the tab there's no
+// file to pick, so up/down just read the rest of the board instead.
+function moveBoard(d) {
+  const n = boardItems();
+  if (n <= 0) return scrollBoard(d);
+  state.boardSel = Math.max(0, Math.min(n - 1, state.boardSel + d));
   render();
 }
 
@@ -1524,6 +1661,10 @@ function onKey(buf) {
 
   if (k === "q") return leave();
   if (k === "\x1b" && buf.length === 1) {
+    if (state.focus === "board") {
+      state.focus = "menu";
+      return render();
+    }
     if (state.filter) {
       state.filter = "";
       clampSel();
@@ -1540,12 +1681,39 @@ function onKey(buf) {
     state.filtering = true;
     state.filter = "";
     state.sel = 0;
+    state.focus = "menu";
     return render();
   }
-  if (k === "j" || k === "\x1b[B") return move(1);
-  if (k === "k" || k === "\x1b[A") return move(-1);
-  if (k === "g") return move(-Infinity);
-  if (k === "G") return move(Infinity);
+  if (k === "\x1b[C" || k === "l") {
+    // → step behind the bar, onto the first file on the open tab
+    if (state.focus === "menu" && visible()[state.sel]) {
+      state.focus = "board";
+      state.boardSel = 0;
+      state.detailScroll = 0;
+      render();
+    }
+    return;
+  }
+  if (k === "\x1b[D" || k === "h") {
+    // ← back out front to the menu
+    if (state.focus === "board") {
+      state.focus = "menu";
+      return render();
+    }
+    return;
+  }
+  if (k === "j" || k === "\x1b[B")
+    return state.focus === "board" ? moveBoard(1) : move(1);
+  if (k === "k" || k === "\x1b[A")
+    return state.focus === "board" ? moveBoard(-1) : move(-1);
+  if (k === "g") {
+    if (state.focus === "board") { state.boardSel = 0; return render(); }
+    return move(-Infinity);
+  }
+  if (k === "G") {
+    if (state.focus === "board") return moveBoard(Infinity);
+    return move(Infinity);
+  }
   if (k === "J") {
     state.detailScroll++; // clamped against the pane in render
     return render();
@@ -1567,6 +1735,7 @@ function onKey(buf) {
     state.sel = 0;
     state.scroll = 0;
     state.detailScroll = 0;
+    state.focus = "menu";
     clampSel();
     return flash(
       state.dirtyOnly ? `${G.dot} dirty plates only` : `${G.ok} the full menu`
@@ -1574,6 +1743,7 @@ function onKey(buf) {
   }
   if (k === "w") {
     state.asking = true;
+    state.focus = "menu";
     state.askCancel = true;
     state.askErr = "";
     state.rootInput = ROOT.replace(os.homedir(), "~");
