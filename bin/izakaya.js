@@ -3,13 +3,56 @@
 // Zero-dependency TokyoNight TUI for the repos in your code directory.
 
 import { promisify } from "node:util";
-import { execFile as execFileCb, spawn } from "node:child_process";
+import { execFile as execFileCb, execFileSync, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { fileURLToPath } from "node:url";
 
 const execFile = promisify(execFileCb);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Version — single source of truth. package.json mirrors this string for the
+// npm/source side; keep the two in step. The bar a curl-install drops onto your
+// PATH is a lone file with no .git beside it, so the commit is best-effort:
+// a live git lookup when run from a checkout (npm link / source tree), and
+// nothing when installed — in which case the line is just the bare version.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const VERSION = "0.1.0";
+
+function commit() {
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const sha = execFileSync("git", ["-C", here, "rev-parse", "--short", "HEAD"], {
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 2000,
+    })
+      .toString()
+      .trim();
+    if (!sha) return null;
+    try {
+      execFileSync("git", ["-C", here, "diff", "--quiet"], { stdio: "ignore" });
+    } catch {
+      return `${sha}-dirty`;
+    }
+    return sha;
+  } catch {
+    return null;
+  }
+}
+
+// Computed once and cached — the header asks for this every frame, but git is
+// only ever spawned the first time.
+let _versionStr;
+function versionString() {
+  if (_versionStr === undefined) {
+    const c = commit();
+    _versionStr = c ? `${VERSION} (${c})` : VERSION;
+  }
+  return _versionStr;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Theme — TokyoNight (Night) panes + the segment colors from the Starship
@@ -342,7 +385,27 @@ function saveConfig(patch) {
 const expandHome = (p) =>
   p === "~" ? os.homedir() : p.replace(/^~\//, os.homedir() + "/");
 
-const ARG_ROOT = process.argv[2] || process.env.IZAKAYA_ROOT || null;
+// Flags before the bar opens. A leading flag is never a root path.
+const ARGV = process.argv.slice(2);
+if (ARGV.includes("--version") || ARGV.includes("-v")) {
+  process.stdout.write(`izakaya ${versionString()}\n`);
+  process.exit(0);
+}
+if (ARGV.includes("--help") || ARGV.includes("-h")) {
+  process.stdout.write(
+    `居酒屋 izakaya — your repos as the menu at a small Tokyo bar.\n\n` +
+      `usage: izakaya [root]\n\n` +
+      `  [root]        directory of repos to scan (default: $IZAKAYA_ROOT,\n` +
+      `                saved config, then ~/code — asked on first visit)\n` +
+      `  -v, --version print the version and leave\n` +
+      `  -h, --help    show this and leave\n\n` +
+      `Once you're in, press ? for the keys. またね.\n`
+  );
+  process.exit(0);
+}
+
+const ARG_ROOT =
+  ARGV.find((a) => !a.startsWith("-")) || process.env.IZAKAYA_ROOT || null;
 let ROOT = path.resolve(
   expandHome(ARG_ROOT || loadConfig().root || path.join(os.homedir(), "code"))
 );
@@ -798,7 +861,8 @@ function headerLine(W) {
   let s = bg(T.bg) + fg(T.seg0) + "░▒▓";
   s += bg(T.seg0) + fg("#090c0c") + ` ${G.lantern} ` ;
   s += bg(T.seg1) + fg(T.seg0) + G.sep;
-  s += bg(T.seg1) + fg(T.segFg) + BOLD + ` 居酒屋 izakaya ` + RESET;
+  s += bg(T.seg1) + fg(T.segFg) + BOLD + ` 居酒屋 izakaya ` + RESET +
+    bg(T.seg1) + fg(T.seg0) + `v${VERSION} ` + RESET;
   s += bg(T.seg2) + fg(T.seg1) + G.sep;
   s += bg(T.seg2) + fg(T.seg1) + ` ${G.folder} ${home} `;
   s += bg(T.seg3) + fg(T.seg2) + G.sep;
@@ -1384,6 +1448,7 @@ function colophonFrame(W, H) {
   body.push(center(fg(T.fgDim) + ITAL + "a sibling of stillpoint: sitting quietly, then building quiet things.") + RESET);
   body.push(blank);
   body.push(center(fg(T.cyan) + `${G.remote} github.com/vajramatt/izakaya`) + RESET);
+  body.push(center(fg(T.fgFaint) + `v${versionString()}`) + RESET);
   body.push(blank);
   body.push(center(fg(T.cyan) + "stillpoint.guru" + RESET + bg(T.bg) + fg(T.fgFaint) + "  ·  " + fg(T.cyan) + "crossinginto.ai" + RESET + bg(T.bg) + fg(T.fgFaint) + "  ·  " + fg(T.cyan) + "hologramthoughts.com") + RESET);
   body.push(blank);

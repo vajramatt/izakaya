@@ -9,6 +9,6 @@
   "engines": {
     "node": ">=22"
   },
-  "author": "Matt Williamson <220089294+vajramatt@users.noreply.github.com>",
+  "author": "Matthew Williamson <220089294+vajramatt@users.noreply.github.com>",
   "license": "MIT"
 }
