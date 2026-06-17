@@ -52,6 +52,18 @@ Or put it on your PATH:
 npm link   # → izakaya
 ```
 
+Two flags pour and leave without opening the bar:
+
+```sh
+izakaya --version   # the vintage, e.g. izakaya 0.1.0 (00ca39e)
+izakaya --help      # the one-screen menu of usage
+```
+
+The version rides in the `居酒屋 izakaya` header chip and the colophon (`~`)
+too. Run from a checkout and it carries the short commit (`-dirty` when the
+tree is); the single curl-installed file, with no `.git` beside it, shows the
+bare version.
+
 On the first visit the bar asks where your work lives and remembers the
 answer. Press `w` any time to move the bar to a different directory. The
 root resolves in this order:
