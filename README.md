@@ -9,8 +9,20 @@ directory and serves them up as small plates: git status, last pour (commit),
 languages, stack chips, size — and whether the kitchen has posted its house
 rules (`CLAUDE.md`).
 
+It's built to answer the three questions a work morning starts with:
+
+- **What changed while I was gone?** The bar remembers your last visit and
+  says so — new pours, plates that joined the menu, work that went unsettled.
+- **What needs me?** Dirty plates and unpushed pours are marked on the menu;
+  `!` is closing time — one screen of everything that exists only on this
+  machine, down to the stash you forgot and the branch that never got pushed.
+- **Take me there.** `iz ramen` from the shell seats you in the repo before
+  the bar even opens; inside, `↵` on a changed file pours its diff, and one
+  key opens the terminal, editor, or Claude Code session where you left it.
+
 The header is styled after the Starship TokyoNight prompt, so it looks like
-the rest of the terminal it lives in. One file, no packages, no build step.
+the rest of the terminal it lives in. One file, no packages, no build step,
+and read-only by design — it never writes to the repos it serves.
 
 **Pull up a stool → [izakaya.guru](https://izakaya.guru)**
 
@@ -55,7 +67,7 @@ npm link   # → izakaya
 Two flags pour and leave without opening the bar:
 
 ```sh
-izakaya --version   # the vintage, e.g. izakaya 0.1.0 (00ca39e)
+izakaya --version   # the vintage, e.g. izakaya 0.3.0 (883c968)
 izakaya --help      # the one-screen menu of usage
 ```
 
@@ -159,12 +171,17 @@ Select a repo and the right panel fills in:
 - **the open tab** — the uncommitted changes, file by file and colored by
   status (modified, added, deleted, renamed, untracked), staged marked. Press
   `→` to step behind the bar and walk the tab with `↑`/`↓`; the file you're on
-  glows orange
+  glows orange, and `↵` peeks the pour — its diff, right there, read-only
 - **the last pour** and the few before it: recent commits with ages
 - **the kitchen** — a 12-week sparkline of commit activity, the chefs who
   cook here, and the shelf: branches, tags, stashes
 - **the pantry** — a language bar with percentages, file count, and size on
   disk
+- **the hand behind the bar** — how much of the recent work Claude
+  co-authored and with which models, plus whether a Claude Code session is
+  open at this repo and when it last spoke (`C` picks it back up)
+- **word from the street** — with `gh` installed, the plate you examine
+  shows its open PRs and latest checks
 - stack chips (frameworks and tooling it spotted), the remote, whether
   `CLAUDE.md` is posted, and the README's opening line in quotes
 
