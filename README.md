@@ -86,7 +86,7 @@ Repeat visits open instantly on the last menu (cached per root in
 | `↵` (behind the bar) | peek the pour — the file's diff, read-only; esc sets it down |
 | `g` / `G` | first / last plate |
 | `J` / `K` | scroll the selected plate's details |
-| `/` | filter the menu (type to narrow, enter keeps, esc clears) |
+| `/` | fuzzy filter the menu — `izk` finds izakaya (enter keeps, esc clears) |
 | `d` | dirty plates only — just the repos with unfinished work |
 | `s` | cycle sort: recent → name → size |
 | `↵` | sit down — leave, and the `iz()` wrapper cd's you into the repo |
@@ -174,6 +174,11 @@ iz() {
 ```
 
 Browse, press `↵`, and you're standing in the repo.
+
+Faster still: give `iz` the name. `iz ramen` fuzzy-matches against last
+visit's menu, and when exactly one plate answers you're seated without the
+bar even opening — two keystrokes and a word to be anywhere. If several
+match, the bar opens pre-filtered so you can pick.
 
 For **fish**, the same idea in fish syntax (`~/.config/fish/config.fish`):
 

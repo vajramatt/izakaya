@@ -395,9 +395,13 @@ if (ARGV.includes("--version") || ARGV.includes("-v")) {
 if (ARGV.includes("--help") || ARGV.includes("-h")) {
   process.stdout.write(
     `居酒屋 izakaya — your repos as the menu at a small Tokyo bar.\n\n` +
-      `usage: izakaya [root]\n\n` +
-      `  [root]        directory of repos to scan (default: $IZAKAYA_ROOT,\n` +
-      `                saved config, then ~/code — asked on first visit)\n` +
+      `usage: izakaya [root] [query]\n\n` +
+      `  [root]        directory of repos to scan — anything that looks like a\n` +
+      `                path: ~/…, /…, ./… (default: $IZAKAYA_ROOT, saved\n` +
+      `                config, then ~/code — asked on first visit)\n` +
+      `  [query]       a bare word fuzzy-filters the menu; when exactly one\n` +
+      `                plate matches, you're seated without the bar opening\n` +
+      `                (the iz() wrapper cd's you straight there)\n` +
       `  -v, --version print the version and leave\n` +
       `  -h, --help    show this and leave\n\n` +
       `Once you're in, press ? for the keys. またね.\n`
@@ -405,8 +409,13 @@ if (ARGV.includes("--help") || ARGV.includes("-h")) {
   process.exit(0);
 }
 
+// A path-looking word (~/…, /…, ./…, or anything with a slash) is the root;
+// a bare word rides in as a fuzzy query — `iz ramen`.
+const ARG_WORDS = ARGV.filter((a) => !a.startsWith("-"));
+const looksLikePath = (a) => /^[~/.]/.test(a) || a.includes("/");
 const ARG_ROOT =
-  ARGV.find((a) => !a.startsWith("-")) || process.env.IZAKAYA_ROOT || null;
+  ARG_WORDS.find(looksLikePath) || process.env.IZAKAYA_ROOT || null;
+const ARG_QUERY = ARG_WORDS.find((a) => !looksLikePath(a)) || null;
 let ROOT = path.resolve(
   expandHome(ARG_ROOT || loadConfig().root || path.join(os.homedir(), "code"))
 );
@@ -723,11 +732,34 @@ const state = {
   saying: null,
 };
 
+// Fuzzy match, launcher-style: every query char must appear in order, and
+// the score prefers matches at the start, after a -_. boundary, and runs of
+// adjacent hits — so `izk` finds izakaya and `rr` finds ramen-router.
+// Returns -1 when the name doesn't match at all.
+function fuzzyScore(query, name) {
+  const q = query.toLowerCase();
+  const n = name.toLowerCase();
+  let qi = 0, score = 0, prev = -2;
+  for (let i = 0; i < n.length && qi < q.length; i++) {
+    if (n[i] !== q[qi]) continue;
+    score += i === 0 || "-_. ".includes(n[i - 1]) ? 3 : 1;
+    if (i === prev + 1) score += 2;
+    prev = i;
+    qi++;
+  }
+  // a light length penalty so the tighter name wins a tie
+  return qi === q.length ? score - n.length * 0.01 : -1;
+}
+
 const visible = () => {
   let rs = state.repos;
   if (state.dirtyOnly) rs = rs.filter((r) => r.dirty > 0);
   if (state.filter)
-    rs = rs.filter((r) => r.name.toLowerCase().includes(state.filter.toLowerCase()));
+    rs = rs
+      .map((r) => [fuzzyScore(state.filter, r.name), r])
+      .filter(([s]) => s >= 0)
+      .sort((a, b) => b[0] - a[0])
+      .map(([, r]) => r);
   return rs;
 };
 
@@ -1469,7 +1501,7 @@ function helpFrame(W, H) {
     ["enter", "behind the bar: peek the pour — the file's diff"],
     ["g / G", "first / last plate"],
     ["J / K", "scroll the plate's details"],
-    ["/", "filter — enter keeps it, esc clears it"],
+    ["/", "fuzzy filter — enter keeps it, esc clears it"],
     ["d", "dirty plates only — show unfinished work"],
     ["enter", "sit down — the iz() wrapper cd's you there"],
     ["o", "open in the file manager — or reveal the file"],
@@ -2214,6 +2246,33 @@ async function openGhosttyWindow(dir, cmd) {
   } catch {
     spawn("open", ["-a", "Terminal", dir], { detached: true, stdio: "ignore" }).unref();
   }
+}
+
+// `iz ramen` — the query rides in ahead of the bar. If last visit's menu
+// knows exactly one plate that answers (or one exact name), skip the TUI
+// entirely: write the seat and let the iz() wrapper cd you there. Anything
+// else opens the bar pre-filtered, ready to narrow.
+if (ARG_QUERY && !DEMO) {
+  const menu = loadMenu();
+  if (menu) {
+    const hits = menu
+      .map((r) => [fuzzyScore(ARG_QUERY, r.name), r])
+      .filter(([s]) => s >= 0)
+      .sort((a, b) => b[0] - a[0]);
+    const exact = hits.filter(([, r]) => r.name.toLowerCase() === ARG_QUERY.toLowerCase());
+    const pick = exact.length === 1 ? exact[0][1] : hits.length === 1 ? hits[0][1] : null;
+    if (pick && fsSync.existsSync(pick.dir)) {
+      try {
+        fsSync.mkdirSync(path.dirname(SEAT_FILE), { recursive: true });
+        fsSync.writeFileSync(SEAT_FILE, pick.dir);
+      } catch {}
+      process.stdout.write(
+        `${G.lantern} ${fg(T.magenta)}seated${RESET} — ${pick.dir.replace(os.homedir(), "~")}\n`
+      );
+      process.exit(0);
+    }
+  }
+  state.filter = ARG_QUERY;
 }
 
 if (!process.stdout.isTTY || !process.stdin.isTTY) {
