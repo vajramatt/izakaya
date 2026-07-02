@@ -23,7 +23,9 @@ menu at a small Tokyo bar.
   side effects allowed are launches: `o` (file manager), `t` (terminal window
   at the repo), `e` (editor), `c` (Claude Code), `C` (resume the Claude
   session), `b` (remote in browser), `y` (clipboard) — plus its own
-  housekeeping files: `~/.config/izakaya/config.json`
+  housekeeping files. Examining a plate may also ask **read-only questions**
+  of `gh` (open PRs, latest checks) when it's installed — queries only, never
+  mutations. The housekeeping files: `~/.config/izakaya/config.json`
   (the saved root, and an optional Linux `terminal` override), and in
   `~/.cache/izakaya/` — `sayings.json` (kotowaza deck cursor), `menu.json`
   (warm-start menu, keyed by root), `seat` (the `↵` cd target the `iz()` shell

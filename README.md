@@ -113,6 +113,11 @@ tells you what changed while you were gone — new pours, plates that joined
 or left the menu, work that went unsettled — and marks freshly-poured
 plates with a teal `+` until you rescan.
 
+And if GitHub's [`gh`](https://cli.github.com) CLI is installed, examining
+a plate (`→`) quietly asks the street about it: open PRs and the latest
+checks appear under the remote. Lazy — only the plate you examine — and
+silent when `gh` is missing, signed out, or the remote isn't GitHub.
+
 ### The launch keys, across platforms
 
 Browsing the menu works anywhere Node does. The launch keys (`o` `t` `e` `c`

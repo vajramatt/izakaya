@@ -121,6 +121,7 @@ const G = {
   lantern: "🏮",
   sake: "",
   copy: "",
+  pr: "",
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -456,9 +457,9 @@ function saveMenu() {
     let all = {};
     try { all = JSON.parse(fsSync.readFileSync(MENU_CACHE, "utf8")); } catch {}
     if (all.v !== MENU_V) all = { v: MENU_V, menus: {} };
-    // session-only garnish (the teal "since your last visit" marks) stays out
-    // of the cache — next visit computes its own delta against clean plates
-    all.menus[ROOT] = state.repos.map(({ fresh, ...r }) => r);
+    // session-only garnish (the teal "since your last visit" marks, gh's
+    // answers) stays out of the cache — next visit asks fresh
+    all.menus[ROOT] = state.repos.map(({ fresh, gh, ...r }) => r);
     fsSync.mkdirSync(path.dirname(MENU_CACHE), { recursive: true });
     fsSync.writeFileSync(MENU_CACHE, JSON.stringify(all));
   } catch {}
@@ -1227,6 +1228,25 @@ function detailLines(repo, W, focusIdx = -1) {
         ? `  ${fg(T.fgDim)}${G.remote} ${fg(T.cyan)}${repo.remote}`
         : `  ${fg(T.fgDim)}${G.remote} ${fg(T.fgFaint)}no remote — house brew only`
     );
+    // word from the street — gh's answer, when one came back
+    if (repo.gh !== undefined) {
+      if (repo.gh === null)
+        pad(`  ${fg(T.fgDim)}${G.pr} ${ITAL}asking the street…`);
+      else if (repo.gh.prs !== null) {
+        const r = repo.gh.run;
+        const ci = !r
+          ? ""
+          : r.status !== "completed"
+            ? `  ·  ${fg(T.yellow)}${G.dot} checks running`
+            : r.conclusion === "success"
+              ? `  ·  ${fg(T.green)}${G.ok} checks passing`
+              : `  ·  ${fg(T.red)}${G.warn} checks ${r.conclusion}`;
+        pad(
+          `  ${fg(T.fgDim)}${G.pr} ${fg(T.fg)}${repo.gh.prs}${fg(T.fgDim)} open ` +
+            `PR${repo.gh.prs === 1 ? "" : "s"}${ci}`
+        );
+      }
+    }
 
     if (repo.changes && repo.changes.length) {
       pad();
@@ -1926,6 +1946,34 @@ function moveBoard(d) {
   render();
 }
 
+// The street outside — with GitHub's own gh CLI on the PATH, examining a
+// plate (→) quietly asks after its open PRs and latest checks. Lazy (only
+// the plate you examine), cached for the session, and silent when gh is
+// missing, unauthenticated, or the remote isn't GitHub. Questions only —
+// gh never mutates anything here.
+const GH = hasBin("gh");
+
+async function fetchGh(repo) {
+  if (DEMO || !GH || repo.gh !== undefined) return;
+  if (!repo.remote || !repo.remote.startsWith("github.com/")) return;
+  repo.gh = null; // the ask is out
+  render();
+  try {
+    const opts = { cwd: repo.dir, timeout: 8000 };
+    const [prs, runs] = await Promise.all([
+      execFile("gh", ["pr", "list", "--json", "number", "--limit", "50"], opts),
+      execFile("gh", ["run", "list", "--limit", "1", "--json", "status,conclusion"], opts),
+    ]);
+    repo.gh = {
+      prs: JSON.parse(prs.stdout || "[]").length,
+      run: JSON.parse(runs.stdout || "[]")[0] || null,
+    };
+  } catch {
+    repo.gh = { prs: null, run: null }; // the street didn't answer — stay quiet
+  }
+  render();
+}
+
 // ↵ behind the bar: peek the pour — the focused file's diff. HEAD first so
 // staged and unstaged land in one glass, then bare / --cached for repos with
 // no HEAD yet, then the raw file when it's untracked and git has nothing to
@@ -2094,6 +2142,7 @@ function onKey(buf) {
       state.focus = "board";
       state.boardSel = 0;
       state.detailScroll = 0;
+      void fetchGh(visible()[state.sel]); // examining a plate asks the street
       render();
     }
     return;
