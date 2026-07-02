@@ -105,6 +105,7 @@ Repeat visits open instantly on the last menu (cached per root in
 | `↵` | sit down — leave, and the `iz()` wrapper cd's you into the repo |
 | `o` | open the repo in the file manager — behind the bar, reveal the file |
 | `t` | new terminal window at the repo |
+| `u` | the usual — your own session script, launched at the repo ([see below](#the-usual--bring-your-own-session)) |
 | `e` | open the repo in `$EDITOR` (vim by default) in a new terminal window — behind the bar, open the file |
 | `c` | start a Claude Code session at the repo in a new terminal window |
 | `C` | resume the Claude session there (`claude --continue`) — the plate says when Claude last spoke |
@@ -223,6 +224,31 @@ function iz
 end
 ```
 
+## The usual — bring your own session
+
+If your day starts with your own session script — tmux panes, agents, vim,
+gitui, logs, all arranged just so — tell the bar your order once:
+
+```sh
+export IZAKAYA_USUAL="dev-session"        # env var, or…
+```
+```json
+// ~/.config/izakaya/config.json
+{ "usual": "~/bin/dev-session" }
+```
+
+Then `u` on any plate fires it at that repo: launched through the same
+platform layer as `t`/`e`/`c` (a **tmux window** when you're inside tmux, a
+terminal window otherwise), via `$SHELL -lc` so your login environment is
+there, with the working directory at the repo and the repo's absolute path
+as `$1`. Extra flags ride along fine: `"usual": "dev-session --layout full"`.
+
+The command comes **only** from your env or config — izakaya never runs
+anything it finds inside a scanned repo, so browsing a freshly-cloned
+stranger's project stays exactly as safe as reading it. And if you'd rather
+enter through the shell, the `iz()` wrapper composes too: add your script
+after the `cd` and every `↵` becomes a session.
+
 ## Atmosphere
 
 Leave the bar alone for half a minute and it quietly lives — the master
@@ -236,8 +262,8 @@ once before any repeats.
 izakaya never writes to the repos it scans. The only files it touches are
 its own:
 
-- `~/.config/izakaya/config.json` — where your work lives (and, on Linux,
-  an optional `terminal` override)
+- `~/.config/izakaya/config.json` — where your work lives, your optional
+  `usual` session script, and (on Linux) an optional `terminal` override
 - `~/.cache/izakaya/menu.json` — the warm-start menu, keyed by root
 - `~/.cache/izakaya/sayings.json` — the kotowaza deck's cursor
 - `~/.cache/izakaya/seat` — the `↵` cd target the `iz()` wrapper consumes

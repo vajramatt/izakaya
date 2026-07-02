@@ -20,7 +20,7 @@ const execFile = promisify(execFileCb);
 // nothing when installed — in which case the line is just the bare version.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 
 function commit() {
   try {
@@ -1615,6 +1615,7 @@ function helpFrame(W, H) {
     ["enter", "sit down — the iz() wrapper cd's you there"],
     ["o", "open in the file manager — or reveal the file"],
     ["t", "terminal window at the repo"],
+    ["u", "the usual — your own session script, launched at the repo"],
     ["e", "$EDITOR at the repo — or at the file under the cursor"],
     ["c", "claude code at the repo"],
     ["C", "resume the claude session there — claude --continue"],
@@ -2238,6 +2239,21 @@ function onKey(buf) {
     else flash(`${G.folder} no opener — install xdg-utils (xdg-open)`);
   }
   if (k === "t") openAtRepo(sel, null, `${G.term} pulled up a stool at ${sel.name}`);
+  if (k === "u") {
+    // the usual — the user's own session script, fired at the repo. Comes
+    // only from their config or env, never from anything found inside a
+    // scanned repo: browsing a cloned repo must never execute its code.
+    const usual = (process.env.IZAKAYA_USUAL || loadConfig().usual || "").trim();
+    if (!usual)
+      return flash(
+        `${G.term} no usual on file — set IZAKAYA_USUAL or "usual" in config (README)`
+      );
+    openAtRepo(
+      sel,
+      `exec ${usual} ${shq(sel.dir)}`,
+      `${G.term} the usual, coming right up — ${sel.name}`
+    );
+  }
   if (k === "e") {
     if (focused) {
       const p = changePath(focused);
