@@ -121,6 +121,8 @@ Browsing the menu works anywhere Node does. The launch keys (`o` `t` `e` `c`
   macOS uses `open` and `pbcopy`; Linux uses `xdg-open`, and for the clipboard
   `wl-copy` (Wayland), `xclip`, or `xsel` — whichever you have installed.
 - **`t` terminal · `e` editor · `c` claude** — spawn a new terminal window.
+  - **inside tmux** (any platform), a new window means a **tmux window** at
+    the repo — the bar meets you where you live, not over it.
   - **macOS** drives Ghostty over AppleScript, falling back to Terminal.app.
   - **Linux** has no standard terminal, so izakaya looks for one in order:
     **kitty → wezterm → alacritty → foot**. To use anything else (or to force

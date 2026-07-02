@@ -2376,10 +2376,23 @@ function spawnLinuxTerminal(dir, inner) {
   return false;
 }
 
+// Inside tmux, a "new window" means a tmux window — the user lives in the
+// multiplexer; popping an OS window over it would miss the point entirely.
+// Applies on every platform, ahead of the per-OS paths.
+function openTmuxWindow(dir, inner) {
+  const args = ["new-window", "-c", dir];
+  if (inner) args.push(process.env.SHELL || "/bin/sh", "-lc", inner);
+  spawnDetached("tmux", args);
+}
+
 // t/e/c — open a terminal at `dir`, optionally running shell command `inner`.
 // Mac is unchanged (Ghostty → Terminal.app), and always "succeeds" because of
 // its fallback; Linux returns false when no terminal could be found.
 function openTerminal(dir, inner) {
+  if (process.env.TMUX && hasBin("tmux")) {
+    openTmuxWindow(dir, inner);
+    return true;
+  }
   if (isMac) {
     // shq, not bare quotes — `inner` can now carry a quoted filename
     void openGhosttyWindow(dir, inner ? `/bin/zsh -lc ${shq(inner)}` : undefined);

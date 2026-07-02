@@ -30,13 +30,15 @@ menu at a small Tokyo bar.
   > ask on first visit.
 - **The launch keys are the only platform-aware code, and they live in one
   place.** All OS dispatch is in the `Platform` section (`isMac`/`isLinux`,
-  `openPath`/`openUrl`/`copyText`/`openTerminal`) — no `process.platform`
-  checks scattered through the handlers. macOS is the reference build: `open`,
-  `pbcopy`, Ghostty via AppleScript → Terminal.app fallback, unchanged. Linux
-  is parity where it's cheap (`xdg-open`; `wl-copy`/`xclip`/`xsel`) and
-  graceful degradation where it isn't (terminal detection: override >
-  kitty > wezterm > alacritty > foot > `$TERMINAL`, then a hint). New launch
-  behavior goes through those primitives, and missing tools hint, never crash.
+  `openPath`/`openUrl`/`copyText`/`openTerminal`/`revealPath`) — no
+  `process.platform` checks scattered through the handlers. macOS is the
+  reference build: `open`, `pbcopy`, Ghostty via AppleScript → Terminal.app
+  fallback, unchanged. Linux is parity where it's cheap (`xdg-open`;
+  `wl-copy`/`xclip`/`xsel`) and graceful degradation where it isn't (terminal
+  detection: override > kitty > wezterm > alacritty > foot > `$TERMINAL`,
+  then a hint). Inside tmux (`$TMUX` set), `openTerminal` opens a tmux window
+  on every platform, ahead of the per-OS paths. New launch behavior goes
+  through those primitives, and missing tools hint, never crash.
 - **The demo bar is fake on purpose.** `scripts/demo.sh` stages
   `/tmp/izakaya-demo` with invented repos so recordings (`docs/demo.tape`,
   rendered with vhs) never show anyone's real projects. Re-record with
