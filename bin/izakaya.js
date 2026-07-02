@@ -523,6 +523,7 @@ async function scanRepo(dirent) {
     chips: [],
     version: null,
     ai: null,
+    claudeUnix: 0, // newest Claude Code session touch for this repo
     hasClaudeMd: false,
     readmeTitle: null,
     recent: [],
@@ -685,6 +686,25 @@ async function scanRepo(dirent) {
   try {
     await fs.access(path.join(dir, "CLAUDE.md"));
     repo.hasClaudeMd = true;
+  } catch {}
+
+  // Who's at the bar right now — a Claude Code session dir for this repo
+  // means Claude has sat here before. The path encoding mirrors Claude
+  // Code's own: every / and . in the absolute path becomes a dash. The
+  // newest session file's mtime is when it last spoke.
+  try {
+    const proj = path.join(
+      os.homedir(), ".claude", "projects", dir.replace(/[/.]/g, "-")
+    );
+    let latest = 0;
+    for (const f of await fs.readdir(proj)) {
+      if (!f.endsWith(".jsonl")) continue;
+      try {
+        const st = await fs.stat(path.join(proj, f));
+        if (st.mtimeMs > latest) latest = st.mtimeMs;
+      } catch {}
+    }
+    if (latest) repo.claudeUnix = Math.floor(latest / 1000);
   } catch {}
 
   for (const rm of ["README.md", "readme.md", "README"]) {
@@ -1310,29 +1330,39 @@ function detailLines(repo, W, focusIdx = -1) {
     );
   }
 
-  if (repo.ai) {
-    const a = repo.ai;
-    const pct = a.total ? Math.round((a.assisted / a.total) * 100) : 0;
+  if (repo.ai || repo.claudeUnix) {
     pad();
     pad(rule("the hand behind the bar"));
-    pad(
-      `  ${fg(T.magenta)}${G.claude} ${fg(T.fg)}Claude${fg(T.fgDim)} had a hand in ` +
-        `${fg(T.fg)}${pct}%${fg(T.fgDim)} of the last ${a.total} ` +
-        `${a.total === 1 ? "pour" : "pours"}  ${fg(T.fgFaint)}(${a.assisted} ` +
-        `commit${a.assisted === 1 ? "" : "s"})`
-    );
-    const shown = a.models.slice(0, 4);
-    const extra = a.models.length - shown.length;
-    let tags = shown
-      .map(
-        (m) =>
-          bg(T.bgHi) + fg(T.magenta) + ` ${m.label} ` +
-          (m.count > 1 ? fg(T.fgFaint) + `${m.count} ` : "") + RESET
-      )
-      .join(" ");
-    if (extra > 0) tags += " " + fg(T.fgFaint) + `+${extra} more`;
-    pad();
-    pad("  " + tags);
+    if (repo.ai) {
+      const a = repo.ai;
+      const pct = a.total ? Math.round((a.assisted / a.total) * 100) : 0;
+      pad(
+        `  ${fg(T.magenta)}${G.claude} ${fg(T.fg)}Claude${fg(T.fgDim)} had a hand in ` +
+          `${fg(T.fg)}${pct}%${fg(T.fgDim)} of the last ${a.total} ` +
+          `${a.total === 1 ? "pour" : "pours"}  ${fg(T.fgFaint)}(${a.assisted} ` +
+          `commit${a.assisted === 1 ? "" : "s"})`
+      );
+      const shown = a.models.slice(0, 4);
+      const extra = a.models.length - shown.length;
+      let tags = shown
+        .map(
+          (m) =>
+            bg(T.bgHi) + fg(T.magenta) + ` ${m.label} ` +
+            (m.count > 1 ? fg(T.fgFaint) + `${m.count} ` : "") + RESET
+        )
+        .join(" ");
+      if (extra > 0) tags += " " + fg(T.fgFaint) + `+${extra} more`;
+      pad();
+      pad("  " + tags);
+    }
+    if (repo.claudeUnix) {
+      if (repo.ai) pad();
+      pad(
+        `  ${fg(T.magenta)}${G.claude} ${fg(T.fg)}a tab is open here` +
+          `${fg(T.fgDim)} — last spoke ${relTime(repo.claudeUnix)}` +
+          `  ·  ${fg(T.magenta)}C${fg(T.fgDim)} picks it back up`
+      );
+    }
   }
 
   pad();
@@ -1567,6 +1597,7 @@ function helpFrame(W, H) {
     ["t", "terminal window at the repo"],
     ["e", "$EDITOR at the repo — or at the file under the cursor"],
     ["c", "claude code at the repo"],
+    ["C", "resume the claude session there — claude --continue"],
     ["b", "open the remote in the browser"],
     ["y", "copy the repo path — or the file's"],
     ["w", "move the bar — scan a different directory"],
@@ -2166,6 +2197,15 @@ function onKey(buf) {
     openAtRepo(sel, "exec ${EDITOR:-vim} .", `${G.edit} editing ${sel.name}`);
   }
   if (k === "c") openAtRepo(sel, "exec claude", `${G.claude} claude is at the bar — ${sel.name}`);
+  if (k === "C") {
+    // resume, not restart — only offered where a session actually exists
+    if (!sel.claudeUnix)
+      return flash(`${G.claude} no claude session at this plate — c starts one`);
+    openAtRepo(
+      sel, "exec claude --continue",
+      `${G.claude} claude picks up where you left off — ${sel.name}`
+    );
+  }
   if (k === "\r" || k === "\n") {
     // sit down: leave the seat for the iz() wrapper to cd into (see README)
     if (!DEMO)

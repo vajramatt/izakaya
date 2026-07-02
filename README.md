@@ -95,6 +95,7 @@ Repeat visits open instantly on the last menu (cached per root in
 | `t` | new terminal window at the repo |
 | `e` | open the repo in `$EDITOR` (vim by default) in a new terminal window — behind the bar, open the file |
 | `c` | start a Claude Code session at the repo in a new terminal window |
+| `C` | resume the Claude session there (`claude --continue`) — the plate says when Claude last spoke |
 | `b` | open the repo's remote in the browser |
 | `y` | copy the repo's path — behind the bar, the file's |
 | `w` | move the bar — scan a different directory |
