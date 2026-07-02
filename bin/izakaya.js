@@ -437,7 +437,7 @@ const SEAT_FILE = path.join(os.homedir(), ".cache", "izakaya", "seat");
 // missing `recent`, say — would crash the first paint before the rescan could
 // heal it, so a mismatched cache is simply thrown out and rebuilt. Bump this
 // whenever a field is added to (or changed on) the repo object.
-const MENU_V = 2;
+const MENU_V = 3;
 
 function loadMenu() {
   if (DEMO) return null;
@@ -529,6 +529,7 @@ async function scanRepo(dirent) {
     branches: 0,
     tags: 0,
     stash: 0,
+    unpushed: 0, // commits on any local branch that no remote has
   };
 
   try {
@@ -537,7 +538,7 @@ async function scanRepo(dirent) {
   } catch {}
 
   if (repo.isGit) {
-    const [branch, status, log, count, remote, ab, recent, activity, authors, branches, tags, stash, aiLog] = await Promise.all([
+    const [branch, status, log, count, remote, ab, recent, activity, authors, branches, tags, stash, unpushed, aiLog] = await Promise.all([
       git(dir, "rev-parse", "--abbrev-ref", "HEAD"),
       git(dir, "status", "--porcelain"),
       git(dir, "log", "-1", "--format=%s%x00%an%x00%ct"),
@@ -550,6 +551,9 @@ async function scanRepo(dirent) {
       git(dir, "branch", "--format=%(refname:short)"),
       git(dir, "tag"),
       git(dir, "stash", "list"),
+      // every commit on any local branch that no remote knows — not just the
+      // current branch's ahead count. This is what the closing-time check reads.
+      git(dir, "rev-list", "--count", "--branches", "--not", "--remotes"),
       // commit bodies, hash-keyed, to sniff AI co-author trailers
       git(dir, "log", "--format=%H%x1f%b%x1e", "-n", "500"),
     ]);
@@ -607,6 +611,7 @@ async function scanRepo(dirent) {
     repo.branches = branches ? branches.split("\n").filter(Boolean).length : 0;
     repo.tags = tags ? tags.split("\n").filter(Boolean).length : 0;
     repo.stash = stash ? stash.split("\n").filter(Boolean).length : 0;
+    repo.unpushed = parseInt(unpushed || "0", 10) || 0;
 
     // Who else was behind the bar — Claude Code stamps the model on every
     // pour it helps with: `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
@@ -727,6 +732,7 @@ const state = {
   rootInput: "",
   askErr: "",
   ambient: "", // the bar quietly lives when you've been idle a while
+  stove: null, // closing time — {scroll} while the sweep is on screen
   colophon: false,
   leaving: false,
   saying: null,
@@ -1001,6 +1007,7 @@ function footerLine(W) {
         ["e", "edit"],
         ["c", "claude"],
         ["s", `sort:${state.sort}`],
+        ["!", "closing time"],
         ["?", "more"],
         ["~", "colophon"],
         ["q", "leave"],
@@ -1222,7 +1229,10 @@ function detailLines(repo, W, focusIdx = -1) {
     pad(
       `  ${fg(T.fgDim)}${G.branch} shelf   ${fg(T.fg)}${repo.branches}${fg(T.fgDim)} ` +
         `branch${repo.branches === 1 ? "" : "es"}  ·  ${G.tag} ${fg(T.fg)}${repo.tags}${fg(T.fgDim)} ` +
-        `tag${repo.tags === 1 ? "" : "s"}  ·  ${fg(T.fg)}${repo.stash}${fg(T.fgDim)} stashed`
+        `tag${repo.tags === 1 ? "" : "s"}  ·  ${fg(T.fg)}${repo.stash}${fg(T.fgDim)} stashed` +
+        (repo.unpushed
+          ? `  ·  ${fg(T.cyan)}${G.ahead}${repo.unpushed}${fg(T.fgDim)} unpushed`
+          : "")
     );
   } else {
     pad(`  ${fg(T.orange)}${G.warn} not a git repo ${fg(T.fgFaint)}— off-menu item`);
@@ -1503,6 +1513,7 @@ function helpFrame(W, H) {
     ["J / K", "scroll the plate's details"],
     ["/", "fuzzy filter — enter keeps it, esc clears it"],
     ["d", "dirty plates only — show unfinished work"],
+    ["!", "closing time — work that exists only on this machine"],
     ["enter", "sit down — the iz() wrapper cd's you there"],
     ["o", "open in the file manager — or reveal the file"],
     ["t", "terminal window at the repo"],
@@ -1531,6 +1542,87 @@ function helpFrame(W, H) {
   body.push(blank);
   body.push(center(fg(T.fgFaint) + "( any key )") + RESET);
 
+  const top = Math.max(0, Math.floor((H - body.length) / 2));
+  const lines = [];
+  for (let i = 0; i < H; i++) {
+    const b = body[i - top];
+    lines.push(b ? padW(b + bg(T.bg), W) + RESET : blank);
+  }
+  return lines;
+}
+
+// Closing time — one sweep of every plate for work that exists only on this
+// machine: unsettled files, stashes, pours no remote has, whole repos that
+// never left the house. The answer to "what dies with this laptop?" —
+// read-only, like everything.
+function stoveFrame(W, H) {
+  const center = (s) =>
+    bg(T.bg) + " ".repeat(Math.max(0, Math.floor((W - visW(s)) / 2))) + s;
+  const blank = bg(T.bg) + " ".repeat(W) + RESET;
+
+  const at = [];
+  for (const r of state.repos) {
+    if (!r.isGit) continue;
+    const facts = [];
+    if (r.dirty) facts.push(fg(T.yellow) + `${G.dot} ${r.dirty} unsettled`);
+    if (r.remote && r.unpushed)
+      facts.push(fg(T.cyan) + `${G.ahead}${r.unpushed} unpushed`);
+    if (!r.remote && r.commits) {
+      const n = r.unpushed || r.commits;
+      facts.push(fg(T.magenta) + `${G.sake} ${n} pour${n === 1 ? "" : "s"} live only here`);
+    }
+    if (r.stash) facts.push(fg(T.orange) + `${r.stash} stashed`);
+    if (facts.length) at.push([r, facts]);
+  }
+  at.sort(
+    ([a], [b]) => b.dirty + b.unpushed + b.stash - (a.dirty + a.unpushed + a.stash)
+  );
+
+  const body = [];
+  body.push(
+    center(fg(T.seg1) + BOLD + `${G.lantern} closing time — what leaves only with this laptop`) + RESET
+  );
+  body.push(blank);
+  if (!at.length) {
+    body.push(center(fg(T.green) + `${G.ok} the stove is clean`) + RESET);
+    body.push(
+      center(fg(T.fgDim) + "every pour is pushed, nothing unsettled, nothing stashed — おやすみ") + RESET
+    );
+  } else {
+    const nameW = Math.min(24, Math.max(...at.map(([r]) => visW(r.name))));
+    const rows = at.map(
+      ([r, facts]) =>
+        fg(T.fg) + padW(truncW(r.name, nameW) + RESET + bg(T.bg), nameW) +
+        "  " + facts.join(fg(T.fgDim) + "  ·  ")
+    );
+    const rowW = Math.min(W - 4, Math.max(...rows.map(visW)));
+    for (const s of rows) body.push(center(padW(truncW(s, rowW), rowW)) + RESET);
+    body.push(blank);
+    const clean = state.repos.filter((r) => r.isGit).length - at.length;
+    body.push(
+      center(
+        fg(T.fgDim) +
+          `${at.length} plate${at.length === 1 ? "" : "s"} carrying work only this machine holds` +
+          (clean > 0 ? `  ·  ${fg(T.green)}${clean} safe` : "")
+      ) + RESET
+    );
+  }
+  body.push(blank);
+  body.push(
+    center(
+      fg(T.fgFaint) +
+        (body.length + 1 > H ? "( j/k scroll · any other key closes )" : "( any key )")
+    ) + RESET
+  );
+
+  // taller than the room: slice from the scroll instead of centering
+  if (body.length > H) {
+    state.stove.scroll = Math.max(0, Math.min(state.stove.scroll, body.length - H));
+    return body
+      .slice(state.stove.scroll, state.stove.scroll + H)
+      .map((b) => padW(b + bg(T.bg), W) + RESET);
+  }
+  state.stove.scroll = 0;
   const top = Math.max(0, Math.floor((H - body.length) / 2));
   const lines = [];
   for (let i = 0; i < H; i++) {
@@ -1602,6 +1694,11 @@ function render() {
 
   if (state.colophon) {
     out.write("\x1b[H" + colophonFrame(W, H).join("\r\n"));
+    return;
+  }
+
+  if (state.stove) {
+    out.write("\x1b[H" + stoveFrame(W, H).join("\r\n"));
     return;
   }
   const listW = Math.max(26, Math.min(38, Math.floor(W * 0.34)));
@@ -1831,6 +1928,19 @@ function onKey(buf) {
     return render();
   }
 
+  if (state.stove) {
+    if (k === "j" || k === "\x1b[B") {
+      state.stove.scroll++; // clamped against the room in stoveFrame
+      return render();
+    }
+    if (k === "k" || k === "\x1b[A") {
+      state.stove.scroll = Math.max(0, state.stove.scroll - 1);
+      return render();
+    }
+    state.stove = null;
+    return render();
+  }
+
   if (state.peek) {
     if (k === "q") return leave();
     if (k === "j" || k === "\x1b[B" || k === "J") {
@@ -1943,6 +2053,10 @@ function onKey(buf) {
   }
   if (k === "~") {
     state.colophon = true;
+    return render();
+  }
+  if (k === "!") {
+    state.stove = { scroll: 0 };
     return render();
   }
   if (k === "d") {
@@ -2062,7 +2176,7 @@ let ambientTick = 0;
 
 setInterval(() => {
   if (
-    state.splash || state.leaving || state.asking ||
+    state.splash || state.leaving || state.asking || state.stove ||
     state.help || state.colophon || state.filtering || state.status
   )
     return;

@@ -88,6 +88,7 @@ Repeat visits open instantly on the last menu (cached per root in
 | `J` / `K` | scroll the selected plate's details |
 | `/` | fuzzy filter the menu — `izk` finds izakaya (enter keeps, esc clears) |
 | `d` | dirty plates only — just the repos with unfinished work |
+| `!` | closing time — every plate carrying work only this machine holds: dirty files, stashes, commits on any branch no remote has, repos that never left the house |
 | `s` | cycle sort: recent → name → size |
 | `↵` | sit down — leave, and the `iz()` wrapper cd's you into the repo |
 | `o` | open the repo in the file manager — behind the bar, reveal the file |
