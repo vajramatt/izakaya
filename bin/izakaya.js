@@ -20,7 +20,7 @@ const execFile = promisify(execFileCb);
 // nothing when installed — in which case the line is just the bare version.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 
 function commit() {
   try {
