@@ -83,18 +83,19 @@ Repeat visits open instantly on the last menu (cached per root in
 | `j` / `k` / arrows | browse the menu |
 | `→` / `←` | step behind the bar / back out front — `→` walks into the open tab |
 | `↑` / `↓` | behind the bar: move file-by-file down the open tab |
+| `↵` (behind the bar) | peek the pour — the file's diff, read-only; esc sets it down |
 | `g` / `G` | first / last plate |
 | `J` / `K` | scroll the selected plate's details |
 | `/` | filter the menu (type to narrow, enter keeps, esc clears) |
 | `d` | dirty plates only — just the repos with unfinished work |
 | `s` | cycle sort: recent → name → size |
 | `↵` | sit down — leave, and the `iz()` wrapper cd's you into the repo |
-| `o` | open the repo in the file manager |
+| `o` | open the repo in the file manager — behind the bar, reveal the file |
 | `t` | new terminal window at the repo |
-| `e` | open the repo in `$EDITOR` (vim by default) in a new terminal window |
+| `e` | open the repo in `$EDITOR` (vim by default) in a new terminal window — behind the bar, open the file |
 | `c` | start a Claude Code session at the repo in a new terminal window |
 | `b` | open the repo's remote in the browser |
-| `y` | copy the repo's path |
+| `y` | copy the repo's path — behind the bar, the file's |
 | `w` | move the bar — scan a different directory |
 | `r` | rescan |
 | `?` | the back page of the menu — all keys |

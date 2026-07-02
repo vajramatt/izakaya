@@ -33,7 +33,8 @@ function commit() {
       .trim();
     if (!sha) return null;
     try {
-      execFileSync("git", ["-C", here, "diff", "--quiet"], { stdio: "ignore" });
+      // against HEAD, so staged-but-uncommitted work still reads as dirty
+      execFileSync("git", ["-C", here, "diff", "--quiet", "HEAD"], { stdio: "ignore" });
     } catch {
       return `${sha}-dirty`;
     }
@@ -423,10 +424,18 @@ const DEMO = !!process.env.IZAKAYA_DEMO;
 const MENU_CACHE = path.join(os.homedir(), ".cache", "izakaya", "menu.json");
 const SEAT_FILE = path.join(os.homedir(), ".cache", "izakaya", "seat");
 
+// The cached menu carries a schema stamp. A plate shape from an older build —
+// missing `recent`, say — would crash the first paint before the rescan could
+// heal it, so a mismatched cache is simply thrown out and rebuilt. Bump this
+// whenever a field is added to (or changed on) the repo object.
+const MENU_V = 2;
+
 function loadMenu() {
   if (DEMO) return null;
   try {
-    const repos = JSON.parse(fsSync.readFileSync(MENU_CACHE, "utf8"))[ROOT];
+    const all = JSON.parse(fsSync.readFileSync(MENU_CACHE, "utf8"));
+    if (all.v !== MENU_V) return null;
+    const repos = all.menus?.[ROOT];
     if (Array.isArray(repos) && repos.length) return repos;
   } catch {}
   return null;
@@ -437,7 +446,8 @@ function saveMenu() {
   try {
     let all = {};
     try { all = JSON.parse(fsSync.readFileSync(MENU_CACHE, "utf8")); } catch {}
-    all[ROOT] = state.repos;
+    if (all.v !== MENU_V) all = { v: MENU_V, menus: {} };
+    all.menus[ROOT] = state.repos;
     fsSync.mkdirSync(path.dirname(MENU_CACHE), { recursive: true });
     fsSync.writeFileSync(MENU_CACHE, JSON.stringify(all));
   } catch {}
@@ -557,6 +567,7 @@ async function scanRepo(dirent) {
         // never surface an embedded user:token@ credential (e.g. an https PAT)
         .replace(/\/\/[^/@]+@/, "//")
         .replace(/^git@([^:]+):/, "$1/")
+        .replace(/^(?:git\+)?ssh:\/\//, "")
         .replace(/^https?:\/\//, "")
         .replace(/\.git$/, "");
     }
@@ -700,6 +711,7 @@ const state = {
   help: false,
   focus: "menu", // "menu" browses the board | "board" steps behind the bar
   boardSel: 0, // which file on the open tab the cursor is standing on
+  peek: null, // the pour, line by line — a file's diff drawn over the board
   detailScroll: 0,
   asking: false, // the "where does the work live?" scene
   askCancel: false, // esc returns to the bar (runtime `w`) vs first visit
@@ -773,7 +785,14 @@ function applySort() {
   clampSel();
 }
 
+// Each scan carries a generation stamp; `w` mid-pour starts a new one, and
+// workers from the old bar notice and set their trays down. Without it a
+// moved ROOT mixes two streets' plates into one menu (scanRepo reads the
+// global ROOT), and the mixed menu gets cached under the new address.
+let scanGen = 0;
+
 async function scanAll() {
+  const gen = ++scanGen;
   state.scanning = true;
   // Warm starts keep the cached menu on screen and refresh plates in place;
   // cold starts (and the very first run) build it from nothing.
@@ -787,6 +806,7 @@ async function scanAll() {
   try {
     entries = await fs.readdir(ROOT, { withFileTypes: true });
   } catch (e) {
+    if (gen !== scanGen) return; // the bar already moved on — die quietly
     die(`cannot read ${ROOT}: ${e.message}`);
   }
   const dirs = entries.filter((e) => e.isDirectory() && !e.name.startsWith("."));
@@ -802,17 +822,23 @@ async function scanAll() {
   const queue = [...dirs];
   const workers = Array.from({ length: 4 }, async () => {
     while (queue.length) {
+      if (gen !== scanGen) return; // stale pour — drop the tray
       const d = queue.shift();
       const repo = await scanRepo(d);
+      if (gen !== scanGen) return;
       const i = state.repos.findIndex((r) => r.name === repo.name);
       if (i >= 0) state.repos[i] = repo;
       else state.repos.push(repo);
       state.scanned++;
       applySort();
+      // a rescan can shorten the open tab under the cursor — keep it on a file
+      if (state.focus === "board")
+        state.boardSel = Math.min(state.boardSel, Math.max(0, boardItems() - 1));
       render();
     }
   });
   await Promise.all(workers);
+  if (gen !== scanGen) return;
   state.scanning = false;
   applySort();
   saveMenu();
@@ -887,7 +913,8 @@ function headerLine(W) {
     RESET + bg(T.bg) + fg(T.seg0) + "▓▒░";
 
   const gap = W - visW(s) - visW(right);
-  if (gap < 1) return padW(bg(T.bg) + s, W) + RESET;
+  // a narrow window gets the left side alone, truncated — never wrapped
+  if (gap < 1) return padW(truncW(s, W), W) + RESET;
   return s + " ".repeat(gap) + right + RESET;
 }
 
@@ -915,13 +942,20 @@ function footerLine(W) {
   }
   if (state.dirtyOnly)
     s += bg(T.seg3) + fg(T.yellow) + ` ${G.dot} dirty only ` + RESET + bg(T.bg) + "  ";
-  const keys = state.focus === "board"
+  const keys = state.peek
+    ? [
+        ["j/k", "scroll"],
+        ["g/G", "top / bottom"],
+        ["esc/←", "back to the tab"],
+        ["q", "leave"],
+      ]
+    : state.focus === "board"
     ? [
         ["↑/↓", "pick a file"],
+        ["↵", "peek the pour"],
         ["←", "back to menu"],
-        ["↵", "sit"],
-        ["e", "edit"],
-        ["c", "claude"],
+        ["e", "edit file"],
+        ["y", "copy path"],
         ["?", "more"],
         ["q", "leave"],
       ]
@@ -1017,6 +1051,12 @@ function changeMark(xy) {
   return { ...kind, staged: x !== " " && x !== "?" };
 }
 
+// a rename reads "old -> new"; the new name is what's on the tab now
+function changePath(ch) {
+  const arrow = ch.path.indexOf(" -> ");
+  return arrow >= 0 ? ch.path.slice(arrow + 4) : ch.path;
+}
+
 function detailLines(repo, W, focusIdx = -1) {
   const L = [];
   const changeRows = []; // line index in L of each open-tab file, for the cursor
@@ -1100,9 +1140,7 @@ function detailLines(repo, W, focusIdx = -1) {
       let ci = 0;
       for (const ch of repo.changes.slice(0, OPEN_TAB_SHOWN)) {
         const m = changeMark(ch.xy);
-        // a rename reads "old -> new"; the new name is what's on the tab now
-        const arrow = ch.path.indexOf(" -> ");
-        const p = arrow >= 0 ? ch.path.slice(arrow + 4) : ch.path;
+        const p = changePath(ch);
         const suffix = `${m.label}${m.staged ? " · staged" : ""}`;
         changeRows.push(L.length);
         if (ci === focusIdx) {
@@ -1220,6 +1258,46 @@ function detailLines(repo, W, focusIdx = -1) {
   }
 
   return { lines: L, changeRows };
+}
+
+// The pour, line by line — a file's diff drawn over the board. Same ribbon
+// shape as a plate, then the hunks in the house colors: added green, gone
+// red, hunk heads cyan, git's own chatter faint. Read-only, like everything.
+function peekPane(peek, W) {
+  const L = [];
+  L.push("");
+  L.push(
+    "  " + fg(T.seg0) + "░▒▓" +
+    bg(T.seg0) + fg("#090c0c") + ` ${G.file} ` +
+    bg(T.seg1) + fg(T.seg0) + G.sep +
+    bg(T.seg1) + fg(T.segFg) + BOLD + ` ${truncW(peek.file, W - 24)} ` + RESET +
+    bg(T.seg2) + fg(T.seg1) + G.sep +
+    bg(T.seg2) + fg(T.segDim) + ` the pour ` +
+    RESET + fg(T.seg2) + G.sep + RESET
+  );
+  L.push("");
+  if (peek.lines === null) {
+    L.push(`  ${fg(T.fgDim)}${ITAL}reading the ledger…`);
+    return L;
+  }
+  if (!peek.lines.length) {
+    L.push(`  ${fg(T.fgDim)}nothing in the glass — git has no diff for this file`);
+    return L;
+  }
+  for (const raw of peek.lines) {
+    // tabs would slip past the width math; control chars would talk to the
+    // terminal directly — neither gets served
+    const line = raw.replaceAll("\t", "    ").replace(/[\x00-\x1f\x7f]/g, "");
+    let c = fg(T.fg);
+    if (line.startsWith("+++") || line.startsWith("---")) c = fg(T.fgDim);
+    else if (line.startsWith("@@")) c = fg(T.cyan);
+    else if (line.startsWith("+")) c = fg(T.green);
+    else if (line.startsWith("-")) c = fg(T.red);
+    else if (/^(diff |index |old mode|new mode|similarity |rename |new file|deleted file|Binary )/.test(line))
+      c = fg(T.fgFaint);
+    L.push("  " + c + line);
+  }
+  return L;
 }
 
 function splashFrame(W, H) {
@@ -1388,17 +1466,18 @@ function helpFrame(W, H) {
     ["j / k", "browse the menu (arrows work too)"],
     ["→ / ←", "step behind the bar / back out front"],
     ["↑ / ↓", "behind the bar: walk the open tab, file by file"],
+    ["enter", "behind the bar: peek the pour — the file's diff"],
     ["g / G", "first / last plate"],
     ["J / K", "scroll the plate's details"],
     ["/", "filter — enter keeps it, esc clears it"],
     ["d", "dirty plates only — show unfinished work"],
     ["enter", "sit down — the iz() wrapper cd's you there"],
-    ["o", "open in the file manager"],
+    ["o", "open in the file manager — or reveal the file"],
     ["t", "terminal window at the repo"],
-    ["e", "$EDITOR at the repo"],
+    ["e", "$EDITOR at the repo — or at the file under the cursor"],
     ["c", "claude code at the repo"],
     ["b", "open the remote in the browser"],
-    ["y", "copy the repo path"],
+    ["y", "copy the repo path — or the file's"],
     ["w", "move the bar — scan a different directory"],
     ["s", "sort: recent · name · size"],
     ["r", "rescan the kitchen"],
@@ -1518,18 +1597,27 @@ function render() {
             : ["", `  ${fg(T.fgDim)}empty bar — no repos found in ${ROOT}`],
         changeRows: [],
       };
-  const detailAll = board.lines;
+  const peeking = !!(state.peek && sel);
+  const detailAll = peeking
+    ? peekPane(state.peek, W - listW - 1)
+    : board.lines;
   // behind the bar, scroll the board so the focused file stays in view
-  if (focusIdx >= 0 && board.changeRows[focusIdx] != null) {
+  if (!peeking && focusIdx >= 0 && board.changeRows[focusIdx] != null) {
     const row = board.changeRows[focusIdx];
     if (row < state.detailScroll) state.detailScroll = row;
     if (row >= state.detailScroll + bodyH) state.detailScroll = row - bodyH + 1;
   }
-  // J/K scroll a plate whose details run past a short terminal
-  state.detailScroll = Math.max(
-    0, Math.min(state.detailScroll, detailAll.length - bodyH)
-  );
-  const detail = detailAll.slice(state.detailScroll);
+  // J/K scroll a plate whose details run past a short terminal; the peek
+  // keeps its own scroll so setting the glass down lands back on the board
+  if (peeking)
+    state.peek.scroll = Math.max(
+      0, Math.min(state.peek.scroll, detailAll.length - bodyH)
+    );
+  else
+    state.detailScroll = Math.max(
+      0, Math.min(state.detailScroll, detailAll.length - bodyH)
+    );
+  const detail = detailAll.slice(peeking ? state.peek.scroll : state.detailScroll);
 
   for (let i = 0; i < bodyH; i++) {
     const idx = state.scroll + i;
@@ -1630,6 +1718,28 @@ function moveBoard(d) {
   render();
 }
 
+// ↵ behind the bar: peek the pour — the focused file's diff. HEAD first so
+// staged and unstaged land in one glass, then bare / --cached for repos with
+// no HEAD yet, then the raw file when it's untracked and git has nothing to
+// say. Strictly read-only.
+async function openPeek(repo, ch) {
+  const p = changePath(ch);
+  state.peek = { file: p, lines: null, scroll: 0 };
+  render();
+  let text = await git(repo.dir, "diff", "HEAD", "--", p);
+  if (!text) text = await git(repo.dir, "diff", "--", p);
+  if (!text) text = await git(repo.dir, "diff", "--cached", "--", p);
+  if (!text) {
+    try {
+      const raw = await fs.readFile(path.join(repo.dir, p), "utf8");
+      text = raw.split("\n").slice(0, 1000).map((l) => "+" + l).join("\n");
+    } catch {}
+  }
+  if (state.peek?.file !== p) return; // the glass was set down mid-pour
+  state.peek.lines = text ? text.split("\n").slice(0, 2000) : [];
+  render();
+}
+
 function onKey(buf) {
   const k = buf.toString();
   lastInput = Date.now();
@@ -1686,6 +1796,23 @@ function onKey(buf) {
 
   if (state.colophon) {
     state.colophon = false;
+    return render();
+  }
+
+  if (state.peek) {
+    if (k === "q") return leave();
+    if (k === "j" || k === "\x1b[B" || k === "J") {
+      state.peek.scroll++; // clamped against the pane in render
+      return render();
+    }
+    if (k === "k" || k === "\x1b[A" || k === "K") {
+      state.peek.scroll = Math.max(0, state.peek.scroll - 1);
+      return render();
+    }
+    if (k === "g") { state.peek.scroll = 0; return render(); }
+    if (k === "G") { state.peek.scroll = Infinity; return render(); } // clamped in render
+    // anything else — esc, ←, ↵ — sets the glass down
+    state.peek = null;
     return render();
   }
 
@@ -1817,12 +1944,33 @@ function onKey(buf) {
 
   const sel = visible()[state.sel];
   if (!sel) return;
+  // behind the bar with a file under the cursor, the keys narrow their aim:
+  // ↵ peeks the pour, e edits that file, y copies its path, o reveals it.
+  // Out front they keep working on the whole plate, exactly as before.
+  const focused =
+    state.focus === "board" && boardItems() > 0
+      ? sel.changes[state.boardSel] || null
+      : null;
+  if (focused && (k === "\r" || k === "\n" || k === " "))
+    return void openPeek(sel, focused);
   if (k === "o") {
+    if (focused) {
+      const p = changePath(focused);
+      if (DEMO || revealPath(path.join(sel.dir, p))) flash(`${G.folder} revealed ${p}`);
+      else flash(`${G.folder} no opener — install xdg-utils (xdg-open)`);
+      return;
+    }
     if (DEMO || openPath(sel.dir)) flash(`${G.folder} opened ${sel.name}`);
     else flash(`${G.folder} no opener — install xdg-utils (xdg-open)`);
   }
   if (k === "t") openAtRepo(sel, null, `${G.term} pulled up a stool at ${sel.name}`);
-  if (k === "e") openAtRepo(sel, "exec ${EDITOR:-vim} .", `${G.edit} editing ${sel.name}`);
+  if (k === "e") {
+    if (focused) {
+      const p = changePath(focused);
+      return openAtRepo(sel, "exec ${EDITOR:-vim} " + shq(p), `${G.edit} editing ${p}`);
+    }
+    openAtRepo(sel, "exec ${EDITOR:-vim} .", `${G.edit} editing ${sel.name}`);
+  }
   if (k === "c") openAtRepo(sel, "exec claude", `${G.claude} claude is at the bar — ${sel.name}`);
   if (k === "\r" || k === "\n") {
     // sit down: leave the seat for the iz() wrapper to cd into (see README)
@@ -1839,8 +1987,9 @@ function onKey(buf) {
     else flash(`${G.remote} no opener — install xdg-utils (xdg-open)`);
   }
   if (k === "y") {
-    if (DEMO || copyText(sel.dir))
-      flash(`${G.copy} path on a coaster — ${sel.dir.replace(os.homedir(), "~")}`);
+    const target = focused ? path.join(sel.dir, changePath(focused)) : sel.dir;
+    if (DEMO || copyText(target))
+      flash(`${G.copy} path on a coaster — ${target.replace(os.homedir(), "~")}`);
     else flash(`${G.copy} no clipboard tool — install wl-clipboard, xclip, or xsel`);
   }
 }
@@ -1923,6 +2072,10 @@ function hasBin(name) {
   return false;
 }
 
+// Shell-quote one argument — POSIX single-quote escaping, so a filename with
+// spaces or quotes survives the trip through `$SHELL -lc`.
+const shq = (s) => `'${s.replaceAll("'", `'\\''`)}'`;
+
 // One detached launch. The error handler matters on Linux: spawning a missing
 // binary fires an async 'error' event that would otherwise crash the bar.
 function spawnDetached(bin, args, cwd) {
@@ -1938,6 +2091,15 @@ function openPath(dir) {
   if (isMac) { spawnDetached("open", [dir]); return true; }
   // TODO(linux): verify xdg-open lands the repo in the user's file manager.
   if (hasBin("xdg-open")) { spawnDetached("xdg-open", [dir]); return true; }
+  return false;
+}
+
+// o behind the bar — reveal a single file rather than open it. mac's
+// `open -R` selects it in Finder; Linux gets the containing folder, which is
+// the closest xdg-open can promise.
+function revealPath(file) {
+  if (isMac) { spawnDetached("open", ["-R", file]); return true; }
+  if (hasBin("xdg-open")) { spawnDetached("xdg-open", [path.dirname(file)]); return true; }
   return false;
 }
 
@@ -2025,7 +2187,8 @@ function spawnLinuxTerminal(dir, inner) {
 // its fallback; Linux returns false when no terminal could be found.
 function openTerminal(dir, inner) {
   if (isMac) {
-    void openGhosttyWindow(dir, inner ? `/bin/zsh -lc '${inner}'` : undefined);
+    // shq, not bare quotes — `inner` can now carry a quoted filename
+    void openGhosttyWindow(dir, inner ? `/bin/zsh -lc ${shq(inner)}` : undefined);
     return true;
   }
   return spawnLinuxTerminal(dir, inner);
