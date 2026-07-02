@@ -107,6 +107,11 @@ The menu marks plates that need attention: `●` uncommitted changes, `⇡`
 commits you haven't pushed, and a small moon on plates untouched for half
 a year.
 
+The bar also remembers your last visit. When the first scan finishes it
+tells you what changed while you were gone — new pours, plates that joined
+or left the menu, work that went unsettled — and marks freshly-poured
+plates with a teal `+` until you rescan.
+
 ### The launch keys, across platforms
 
 Browsing the menu works anywhere Node does. The launch keys (`o` `t` `e` `c`

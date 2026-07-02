@@ -456,7 +456,9 @@ function saveMenu() {
     let all = {};
     try { all = JSON.parse(fsSync.readFileSync(MENU_CACHE, "utf8")); } catch {}
     if (all.v !== MENU_V) all = { v: MENU_V, menus: {} };
-    all.menus[ROOT] = state.repos;
+    // session-only garnish (the teal "since your last visit" marks) stays out
+    // of the cache — next visit computes its own delta against clean plates
+    all.menus[ROOT] = state.repos.map(({ fresh, ...r }) => r);
     fsSync.mkdirSync(path.dirname(MENU_CACHE), { recursive: true });
     fsSync.writeFileSync(MENU_CACHE, JSON.stringify(all));
   } catch {}
@@ -798,7 +800,8 @@ function endSplash() {
   state.splash = false;
   clearInterval(splashTimer);
   startSweep();
-  flash(greeting());
+  // the delta flash may already be up — the greeting is fluff, it can yield
+  if (!state.status) flash(greeting());
 }
 
 // Drop the curtain once the first scan is done and the logo has had its moment.
@@ -821,6 +824,41 @@ function applySort() {
     if (i >= 0) state.sel = i;
   }
   clampSel();
+}
+
+// The ritual: yesterday's cached menu, held from boot, against tonight's
+// fresh scan — what changed while you were gone. Reported once, on the first
+// full pour of the session; plates that took new pours carry a teal + until
+// the next rescan reads them again.
+let lastVisitMenu = null;
+let visitNoted = false;
+
+function noteVisitDelta() {
+  if (visitNoted) return;
+  visitNoted = true;
+  if (!lastVisitMenu) return;
+  const before = new Map(lastVisitMenu.map((r) => [r.name, r]));
+  let pours = 0, plates = 0, newDirty = 0;
+  const arrivals = [];
+  for (const r of state.repos) {
+    const b = before.get(r.name);
+    if (!b) { arrivals.push(r.name); continue; }
+    const d = r.commits - b.commits;
+    if (d > 0) { r.fresh = d; pours += d; plates++; }
+    if (r.dirty > 0 && !b.dirty) newDirty++;
+  }
+  const gone = lastVisitMenu.filter((b) => !state.repos.some((r) => r.name === b.name)).length;
+  const bits = [];
+  if (plates)
+    bits.push(`${pours} new pour${pours === 1 ? "" : "s"} across ${plates} plate${plates === 1 ? "" : "s"}`);
+  if (arrivals.length)
+    bits.push(
+      `${arrivals.slice(0, 2).join(", ")}${arrivals.length > 2 ? ` +${arrivals.length - 2}` : ""} joined the menu`
+    );
+  if (newDirty) bits.push(`${newDirty} newly unsettled`);
+  if (gone) bits.push(`${gone} left the menu`);
+  if (bits.length)
+    flash(`${G.sake} since your last visit — ${bits.join("  ·  ")}`, 6000);
 }
 
 // Each scan carries a generation stamp; `w` mid-pour starts a new one, and
@@ -879,6 +917,7 @@ async function scanAll() {
   if (gen !== scanGen) return;
   state.scanning = false;
   applySort();
+  noteVisitDelta();
   saveMenu();
   maybeEndSplash();
   render();
@@ -900,7 +939,11 @@ function moveBar(input) {
   if (!st.isDirectory()) return "that's a file, not a neighborhood";
   ROOT = p;
   if (!DEMO) saveConfig({ root: raw });
-  state.repos = loadMenu() || [];
+  const cached = loadMenu();
+  // if the session's opening delta hasn't been told yet, tell it about the
+  // street the bar actually ends up on
+  if (!visitNoted) lastVisitMenu = cached;
+  state.repos = cached || [];
   if (state.repos.length && state.splash) maybeEndSplash();
   state.sel = 0;
   state.scroll = 0;
@@ -1043,8 +1086,10 @@ function listRow(repo, selected, W) {
         : fg(T.green) + G.ok;
   // unpushed work is the most actionable fact on the menu — surface it
   const aheadMark = repo.isGit && repo.ahead > 0 ? fg(T.cyan) + G.ahead : "";
+  // new pours since your last visit — reads away on the next rescan
+  const freshMark = repo.fresh ? fg(T.teal) + "+" : "";
   const age = fg(T.fgDim) + relTime(repo.lastUnix);
-  const right = `${dirtyMark}${aheadMark} ${age}`;
+  const right = `${freshMark}${dirtyMark}${aheadMark} ${age}`;
   const rightW = visW(right);
   let left = `${accent}${base} ${icon} ${nameC}${base}${repo.name}${RESET}${base}`;
   left = truncW(left, W - rightW - 2) + base;
@@ -1217,7 +1262,10 @@ function detailLines(repo, W, focusIdx = -1) {
           SPARK[Math.min(7, Math.max(1, Math.ceil((repo.weeks[i] / peak) * 7)))];
     pad(
       `  ${fg(T.fgDim)}${G.pulse} pours   ${spark}${RESET}${bg(T.bg)}  ${fg(T.fgFaint)}12 weeks` +
-        (repo.weeks.every((w) => w === 0) ? " — the kitchen sleeps" : "")
+        (repo.weeks.every((w) => w === 0) ? " — the kitchen sleeps" : "") +
+        (repo.fresh
+          ? `  ${fg(T.teal)}+${repo.fresh} since your last visit`
+          : "")
     );
     if (repo.chefs.length)
       pad(
@@ -2150,11 +2198,11 @@ function openAtRepo(sel, inner, okMsg) {
 }
 
 let flashTimer;
-function flash(msg) {
+function flash(msg, ms = 2000) {
   state.status = msg;
   render();
   clearTimeout(flashTimer);
-  flashTimer = setTimeout(() => { state.status = ""; render(); }, 2000);
+  flashTimer = setTimeout(() => { state.status = ""; render(); }, ms);
 }
 
 // ── Ambience ─────────────────────────────────────────────────────────────
@@ -2415,6 +2463,7 @@ if (FIRST_VISIT && !DEMO) {
 } else {
   const cached = loadMenu();
   if (cached) {
+    lastVisitMenu = cached; // held for the "since your last visit" pour
     state.repos = cached;
     applySort();
     maybeEndSplash(); // yesterday's menu is already out — don't hold the curtain
