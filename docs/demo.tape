@@ -2,6 +2,7 @@
 #
 #   ./scripts/demo.sh && vhs docs/demo.tape
 #
+# Also drops the README stills into docs/screens/ along the way.
 # Needs a nerd font installed (JetBrainsMono Nerd Font).
 
 Output docs/demo.gif
@@ -22,52 +23,67 @@ Enter
 # splash: flowing gradient + the pour
 Sleep 3.5s
 
-# browse a few plates
+# browse a few plates, then back to the top for the fullest plate
 Type@350ms "jjj"
-Sleep 1.8s
-Type@350ms "jj"
-Sleep 2s
+Sleep 1.5s
+Type@300ms "jj"
+Sleep 1.5s
+Type "g"
+Sleep 1.2s
+Screenshot docs/screens/menu.png
+Sleep 800ms
 
-# filter for the noodles
+# fuzzy filter — two letters find the citrus
 Type "/"
-Sleep 600ms
-Type@250ms "ramen"
+Sleep 500ms
+Type@250ms "yz"
 Sleep 1.2s
 Enter
-Sleep 2s
+Sleep 800ms
+
+# step behind the bar and walk the open tab
+Right
+Sleep 1.2s
+Down
+Sleep 600ms
+Up
+Sleep 600ms
+
+# peek the pour — the file's diff, read-only
+Enter
+Sleep 2.5s
+Screenshot docs/screens/peek.png
+Sleep 800ms
+Type "j"
+Sleep 400ms
+Type "j"
+Sleep 800ms
 Escape
-Sleep 1s
+Sleep 700ms
 
-# sort by size, then back to top
-Type "s"
-Sleep 1.5s
-Type "s"
-Sleep 1s
-Type "g"
-Sleep 1.5s
-
-# the back page of the menu, then just the dirty plates
-Type "?"
-Sleep 2.5s
-Type "?"
-Sleep 800ms
-Type "d"
-Sleep 2s
-Type "d"
-Sleep 1s
-
-# the colophon — who keeps this bar
-Type "~"
-Sleep 2.5s
-Type "~"
+# back out front, clear the filter
+Left
+Sleep 600ms
+Escape
 Sleep 800ms
 
-# crack the repo open: editor, then a claude session
-# (IZAKAYA_DEMO suppresses the real launches)
-Type "e"
-Sleep 1.8s
+# closing time — what leaves only with this laptop
+Type "!"
+Sleep 2.8s
+Screenshot docs/screens/closing-time.png
+Sleep 400ms
+Escape
+Sleep 800ms
+
+# dirty plates only, then the full menu again
+Type "d"
+Sleep 1.5s
+Type "d"
+Sleep 800ms
+
+# a claude session at the bar (IZAKAYA_DEMO suppresses the real launch)
 Type "c"
-Sleep 2s
+Sleep 1.8s
 
 # またね — the farewell scene plays, then auto-exits
 Type "q"

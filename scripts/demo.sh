@@ -67,11 +67,33 @@ mkdir -p "$R/src"
 lorem "$R/src/Button.tsx" 7000
 lorem "$R/src/Modal.tsx" 5000
 lorem "$R/src/zest.css" 8000
+# a legible file, so the peek scene (↵ on the open tab) shows a real diff
+# instead of lorem noise — the camera lands here first (alphabetical)
+cat > "$R/src/lantern.css" <<'EOF'
+.lantern {
+  color: #ff9e64;
+  text-shadow: 0 0 12px rgba(255, 158, 100, 0.45);
+  animation: sway 4s ease-in-out infinite;
+}
+
+@keyframes sway {
+  from { transform: rotate(-2deg); }
+  to   { transform: rotate(2deg); }
+}
+EOF
 pad_commits "$R" "Kenji Sato" 11 30
 ci "$R" "Kenji Sato" 26 "fix: modal focus trap escapes on shoji slide"
 git -C "$R" remote add origin git@github.com:kenjisato/yuzu-ui.git
 lorem "$R/src/Toast.tsx" 2000   # uncommitted
 echo "/* wip */" >> "$R/src/zest.css"
+# the uncommitted pour the peek opens on — a warm color and a new rule
+sed -i '' 's/#ff9e64/#e0af68/' "$R/src/lantern.css"
+cat >> "$R/src/lantern.css" <<'EOF'
+
+.lantern:hover {
+  animation-play-state: paused;
+}
+EOF
 
 # ── sashimi-db — Go, clean but ⇡2 unpushed ───────────────────────────────────
 mk sashimi-db

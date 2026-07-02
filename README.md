@@ -2,7 +2,11 @@
 
 ![izakaya — figlet ANSI Shadow in a TokyoNight gradient](docs/banner.svg)
 
-![izakaya browsing a demo bar: animated gradient splash, then the TUI](docs/demo.gif)
+![izakaya browsing a demo bar: gradient splash, fuzzy filter, the diff peek, closing time](docs/demo.gif)
+
+| the menu | peek the pour | closing time |
+| --- | --- | --- |
+| ![the menu — repos as plates, one selected with its full detail](docs/screens/menu.png) | ![peek — a changed file's diff, poured behind the bar](docs/screens/peek.png) | ![closing time — every plate carrying work only this machine holds](docs/screens/closing-time.png) |
 
 A zero-dependency TokyoNight TUI that scans every project in your code
 directory and serves them up as small plates: git status, last pour (commit),
@@ -275,7 +279,8 @@ browser, the clipboard — is a launch, not a mutation.
 
 The recording above is staged — `scripts/demo.sh` builds a fake bar of repos
 at `/tmp/izakaya-demo` (varied languages, ages, dirty states, unpushed work),
-and `docs/demo.tape` replays the session with [vhs](https://github.com/charmbracelet/vhs):
+and `docs/demo.tape` replays the session with [vhs](https://github.com/charmbracelet/vhs).
+The stills in the table up top are `Screenshot` frames from the same tape:
 
 ```sh
 ./scripts/demo.sh && vhs docs/demo.tape
