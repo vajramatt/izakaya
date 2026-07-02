@@ -10,9 +10,14 @@ menu at a small Tokyo bar.
   no ink/blessed/react. If a feature needs a package, it doesn't belong here.
 - **Node ≥22, ESM only.** Plain modern JavaScript, no build step, no TypeScript
   compilation. Run it with `node bin/izakaya.js` or `npm link` → `izakaya`.
-- **The theme is law.** TokyoNight (Night) palette in the `T` object, plus the
-  segment colors from the Starship TokyoNight preset so the header reads like
-  the prompt it sits above. Don't introduce colors outside `T`.
+- **`T` is law.** Every color the bar paints is read from the active theme's
+  `T` at render time; themes live in `THEMES` as pure data (the same key set
+  plus gradient stops) and `T` cycles them live. TokyoNight (Night) is the
+  default and the reference — its segment colors come from the Starship
+  TokyoNight preset so the header reads like the prompt it sits above. Don't
+  introduce colors outside `T`, and never bake a resolved hex into a
+  module-init table or the cached menu — store T-key names (or language
+  names) and resolve at render, or the lanterns can't change.
 - **Nerd-font glyphs assumed.** Built for a truecolor terminal with a nerd
   font (Ghostty + Starship is the reference setup); glyphs live in the `G`
   object. Keep them there, not inline.

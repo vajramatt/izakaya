@@ -106,6 +106,7 @@ Repeat visits open instantly on the last menu (cached per root in
 | `d` | dirty plates only — just the repos with unfinished work |
 | `!` | closing time — every plate carrying work only this machine holds: dirty files, stashes, commits on any branch no remote has, repos that never left the house |
 | `s` | cycle sort: recent → name → size |
+| `T` | change the lanterns — cycle the theme: tokyonight → iceberg → nord → catppuccin-mocha (remembered) |
 | `↵` | sit down — leave, and the `iz()` wrapper cd's you into the repo |
 | `o` | open the repo in the file manager — behind the bar, reveal the file |
 | `t` | new terminal window at the repo |
@@ -253,6 +254,26 @@ stranger's project stays exactly as safe as reading it. And if you'd rather
 enter through the shell, the `iz()` wrapper composes too: add your script
 after the `cd` and every `↵` becomes a session.
 
+## Themes — the lanterns
+
+TokyoNight (Night) is the house light, but the bar hangs four:
+**tokyonight · iceberg · nord · catppuccin-mocha**. Press `T` to change the
+lanterns live — the whole room repaints in one frame — and the choice is
+remembered. Or set it ahead of time:
+
+```sh
+export IZAKAYA_THEME="nord"          # env var, or…
+```
+```json
+// ~/.config/izakaya/config.json
+{ "theme": "catppuccin-mocha" }
+```
+
+Every color the bar paints flows through the active theme — panes, plates,
+diffs, the header ramp, even the splash gradient — and a theme is pure data
+(the same two dozen keys plus gradient stops), so adding one is a ~30-line,
+data-only pull request. Hexes come from each palette's canonical definitions.
+
 ## Atmosphere
 
 Leave the bar alone for half a minute and it quietly lives — the master
@@ -266,8 +287,9 @@ once before any repeats.
 izakaya never writes to the repos it scans. The only files it touches are
 its own:
 
-- `~/.config/izakaya/config.json` — where your work lives, your optional
-  `usual` session script, and (on Linux) an optional `terminal` override
+- `~/.config/izakaya/config.json` — where your work lives, your `theme`,
+  your optional `usual` session script, and (on Linux) an optional
+  `terminal` override
 - `~/.cache/izakaya/menu.json` — the warm-start menu, keyed by root
 - `~/.cache/izakaya/sayings.json` — the kotowaza deck's cursor
 - `~/.cache/izakaya/seat` — the `↵` cd target the `iz()` wrapper consumes

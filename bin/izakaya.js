@@ -20,7 +20,7 @@ const execFile = promisify(execFileCb);
 // nothing when installed — in which case the line is just the bare version.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 
 function commit() {
   try {
@@ -56,34 +56,88 @@ function versionString() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Theme — TokyoNight (Night) panes + the segment colors from the Starship
-// TokyoNight preset so the header reads like the prompt it sits above.
+// Themes — the lanterns. T is law: every color the bar paints is read from
+// the active theme at render time. A theme is pure data — the same key set
+// plus gradient stops — so a new one is a ~30-line, data-only patch. Each
+// carries its own seg0–4 header ramp (TokyoNight's comes from the Starship
+// preset so the header reads like the prompt it sits above) and its own
+// stops so the splash waves in the theme's light, not TokyoNight's.
+// TokyoNight (Night) is the house light and the reference.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const T = {
-  bg: "#1a1b26",
-  bgPanel: "#16161e",
-  bgHi: "#292e42",
-  fg: "#c0caf5",
-  fgDim: "#565f89",
-  fgFaint: "#3b4261",
-  blue: "#7aa2f7",
-  cyan: "#7dcfff",
-  teal: "#73daca",
-  green: "#9ece6a",
-  yellow: "#e0af68",
-  orange: "#ff9e64",
-  red: "#f7768e",
-  magenta: "#bb9af7",
-  // starship prompt segments
-  seg0: "#a3aed2",
-  seg1: "#769ff0",
-  seg2: "#394260",
-  seg3: "#212736",
-  seg4: "#1d2230",
-  segFg: "#e3e5e5",
-  segDim: "#a0a9cb",
+const THEMES = {
+  tokyonight: {
+    colors: {
+      bg: "#1a1b26", bgPanel: "#16161e", bgHi: "#292e42",
+      fg: "#c0caf5", fgDim: "#565f89", fgFaint: "#3b4261",
+      blue: "#7aa2f7", cyan: "#7dcfff", teal: "#73daca", green: "#9ece6a",
+      yellow: "#e0af68", orange: "#ff9e64", red: "#f7768e", magenta: "#bb9af7",
+      seg0: "#a3aed2", seg1: "#769ff0", seg2: "#394260", seg3: "#212736",
+      seg4: "#1d2230", segFg: "#e3e5e5", segDim: "#a0a9cb",
+    },
+    stops: [
+      [122, 162, 247], [125, 207, 255], [187, 154, 247],
+      [115, 218, 202], [158, 206, 106], [247, 118, 142],
+    ],
+  },
+  // cocopon/iceberg.vim — bluish, well-frozen
+  iceberg: {
+    colors: {
+      bg: "#161821", bgPanel: "#131521", bgHi: "#272c42",
+      fg: "#c6c8d1", fgDim: "#6b7089", fgFaint: "#444b71",
+      blue: "#84a0c6", cyan: "#89b8c2", teal: "#95c4ce", green: "#b4be82",
+      yellow: "#e9b189", orange: "#e2a478", red: "#e27878", magenta: "#a093c7",
+      seg0: "#b4b9ca", seg1: "#84a0c6", seg2: "#2e3244", seg3: "#22263a",
+      seg4: "#1b1e2e", segFg: "#d2d4de", segDim: "#9a9ebc",
+    },
+    stops: [
+      [132, 160, 198], [137, 184, 194], [160, 147, 199],
+      [149, 196, 206], [180, 190, 130], [226, 120, 120],
+    ],
+  },
+  // nordtheme — polar nights, frost, aurora
+  nord: {
+    colors: {
+      bg: "#2e3440", bgPanel: "#272c36", bgHi: "#3b4252",
+      fg: "#d8dee9", fgDim: "#616e88", fgFaint: "#4c566a",
+      blue: "#81a1c1", cyan: "#88c0d0", teal: "#8fbcbb", green: "#a3be8c",
+      yellow: "#ebcb8b", orange: "#d08770", red: "#bf616a", magenta: "#b48ead",
+      seg0: "#b8c5dd", seg1: "#81a1c1", seg2: "#434c5e", seg3: "#3b4252",
+      seg4: "#333a47", segFg: "#eceff4", segDim: "#aab4c8",
+    },
+    stops: [
+      [136, 192, 208], [129, 161, 193], [180, 142, 173],
+      [143, 188, 187], [163, 190, 140], [208, 135, 112],
+    ],
+  },
+  // catppuccin, mocha flavor — soothing pastels
+  "catppuccin-mocha": {
+    colors: {
+      bg: "#1e1e2e", bgPanel: "#181825", bgHi: "#313244",
+      fg: "#cdd6f4", fgDim: "#6c7086", fgFaint: "#45475a",
+      blue: "#89b4fa", cyan: "#89dceb", teal: "#94e2d5", green: "#a6e3a1",
+      yellow: "#f9e2af", orange: "#fab387", red: "#f38ba8", magenta: "#cba6f7",
+      seg0: "#b4befe", seg1: "#89b4fa", seg2: "#45475a", seg3: "#313244",
+      seg4: "#292c3d", segFg: "#cdd6f4", segDim: "#a6adc8",
+    },
+    stops: [
+      [137, 180, 250], [137, 220, 235], [203, 166, 247],
+      [148, 226, 213], [166, 227, 161], [243, 139, 168],
+    ],
+  },
 };
+
+// The active light. T's identity never changes — every renderer reads
+// through it — only its values swap when the lanterns do.
+let themeName = "tokyonight";
+const T = { ...THEMES.tokyonight.colors };
+
+function applyTheme(name) {
+  if (!THEMES[name]) name = "tokyonight";
+  themeName = name;
+  Object.assign(T, THEMES[name].colors);
+  STOPS.splice(0, STOPS.length, ...THEMES[name].stops);
+}
 
 const hex2rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
 const fg = (h) => `\x1b[38;2;${hex2rgb(h).join(";")}m`;
@@ -139,10 +193,9 @@ const ART = `
 ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝
 `.replace(/^\n|\n$/g, "").split("\n");
 
-// TokyoNight gradient stops: blue → cyan → purple → teal → green → pink.
-const STOPS = [
-  [122, 162, 247], [125, 207, 255], [187, 154, 247], [115, 218, 202], [158, 206, 106], [247, 118, 142],
-];
+// Gradient stops, blue → cyan → purple → teal → green → pink in the house
+// light; applyTheme swaps the contents in place when the lanterns change.
+const STOPS = [...THEMES.tokyonight.stops];
 
 const lerp = (a, b, t) => Math.round(a + (b - a) * t);
 function gradColor(p) {
@@ -236,38 +289,46 @@ function pickSaying() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const LANGS = {
-  ts: { name: "TypeScript", color: T.blue, icon: "" },
-  tsx: { name: "TypeScript", color: T.blue, icon: "" },
-  mts: { name: "TypeScript", color: T.blue, icon: "" },
-  cts: { name: "TypeScript", color: T.blue, icon: "" },
-  js: { name: "JavaScript", color: T.yellow, icon: "" },
-  jsx: { name: "JavaScript", color: T.yellow, icon: "" },
-  mjs: { name: "JavaScript", color: T.yellow, icon: "" },
-  cjs: { name: "JavaScript", color: T.yellow, icon: "" },
-  astro: { name: "Astro", color: T.orange, icon: "" },
-  svelte: { name: "Svelte", color: T.orange, icon: "" },
-  vue: { name: "Vue", color: T.green, icon: "" },
-  rs: { name: "Rust", color: T.orange, icon: "" },
-  go: { name: "Go", color: T.cyan, icon: "" },
-  py: { name: "Python", color: T.green, icon: "" },
-  rb: { name: "Ruby", color: T.red, icon: "" },
-  php: { name: "PHP", color: T.magenta, icon: "" },
-  swift: { name: "Swift", color: T.orange, icon: "" },
-  css: { name: "CSS", color: T.magenta, icon: "" },
-  scss: { name: "SCSS", color: T.magenta, icon: "" },
-  html: { name: "HTML", color: T.red, icon: "" },
-  md: { name: "Markdown", color: T.fgDim, icon: "" },
-  mdx: { name: "MDX", color: T.fgDim, icon: "" },
-  json: { name: "JSON", color: T.teal, icon: "" },
-  jsonc: { name: "JSON", color: T.teal, icon: "" },
-  toml: { name: "TOML", color: T.teal, icon: "" },
-  yaml: { name: "YAML", color: T.teal, icon: "" },
-  yml: { name: "YAML", color: T.teal, icon: "" },
-  sql: { name: "SQL", color: T.cyan, icon: "" },
-  sh: { name: "Shell", color: T.green, icon: "" },
-  zsh: { name: "Shell", color: T.green, icon: "" },
-  bash: { name: "Shell", color: T.green, icon: "" },
+  ts: { name: "TypeScript", color: "blue", icon: "" },
+  tsx: { name: "TypeScript", color: "blue", icon: "" },
+  mts: { name: "TypeScript", color: "blue", icon: "" },
+  cts: { name: "TypeScript", color: "blue", icon: "" },
+  js: { name: "JavaScript", color: "yellow", icon: "" },
+  jsx: { name: "JavaScript", color: "yellow", icon: "" },
+  mjs: { name: "JavaScript", color: "yellow", icon: "" },
+  cjs: { name: "JavaScript", color: "yellow", icon: "" },
+  astro: { name: "Astro", color: "orange", icon: "" },
+  svelte: { name: "Svelte", color: "orange", icon: "" },
+  vue: { name: "Vue", color: "green", icon: "" },
+  rs: { name: "Rust", color: "orange", icon: "" },
+  go: { name: "Go", color: "cyan", icon: "" },
+  py: { name: "Python", color: "green", icon: "" },
+  rb: { name: "Ruby", color: "red", icon: "" },
+  php: { name: "PHP", color: "magenta", icon: "" },
+  swift: { name: "Swift", color: "orange", icon: "" },
+  css: { name: "CSS", color: "magenta", icon: "" },
+  scss: { name: "SCSS", color: "magenta", icon: "" },
+  html: { name: "HTML", color: "red", icon: "" },
+  md: { name: "Markdown", color: "fgDim", icon: "" },
+  mdx: { name: "MDX", color: "fgDim", icon: "" },
+  json: { name: "JSON", color: "teal", icon: "" },
+  jsonc: { name: "JSON", color: "teal", icon: "" },
+  toml: { name: "TOML", color: "teal", icon: "" },
+  yaml: { name: "YAML", color: "teal", icon: "" },
+  yml: { name: "YAML", color: "teal", icon: "" },
+  sql: { name: "SQL", color: "cyan", icon: "" },
+  sh: { name: "Shell", color: "green", icon: "" },
+  zsh: { name: "Shell", color: "green", icon: "" },
+  bash: { name: "Shell", color: "green", icon: "" },
 };
+
+// Colors above are T-key names, not hexes, so plates repaint when the
+// lanterns change — and the cached menu stores language *names* only.
+// Resolve name → { color, icon } at render time.
+function langMeta(name) {
+  const l = Object.values(LANGS).find((x) => x.name === name);
+  return { color: l ? T[l.color] : T.fgDim, icon: l?.icon || "" };
+}
 
 const SKIP_DIRS = new Set([
   "node_modules", ".git", "dist", "build", ".astro", ".wrangler", ".next",
@@ -277,14 +338,14 @@ const SKIP_DIRS = new Set([
 
 // Stack detection — "today's specials"
 const STACK_CHIPS = [
-  { dep: "hono", label: " hono", color: T.orange },
-  { dep: "react", label: " react", color: T.cyan },
-  { dep: "astro", label: " astro", color: T.orange },
-  { dep: "vite", label: " vite", color: T.magenta },
-  { dep: "drizzle-orm", label: " drizzle", color: T.green },
-  { dep: "tailwindcss", label: "󱏿 tailwind", color: T.cyan },
-  { dep: "svelte", label: " svelte", color: T.orange },
-  { dep: "next", label: " next", color: T.fg },
+  { dep: "hono", label: " hono", color: "orange" },
+  { dep: "react", label: " react", color: "cyan" },
+  { dep: "astro", label: " astro", color: "orange" },
+  { dep: "vite", label: " vite", color: "magenta" },
+  { dep: "drizzle-orm", label: " drizzle", color: "green" },
+  { dep: "tailwindcss", label: "󱏿 tailwind", color: "cyan" },
+  { dep: "svelte", label: " svelte", color: "orange" },
+  { dep: "next", label: " next", color: "fg" },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -423,6 +484,10 @@ let ROOT = path.resolve(
 // Nothing pointed the way and nothing is saved — ask before opening.
 const FIRST_VISIT = !ARG_ROOT && !loadConfig().root;
 
+// Hang tonight's lanterns before anything paints: env > config > the house
+// light. (T cycles them live once the bar is open.)
+applyTheme(process.env.IZAKAYA_THEME || loadConfig().theme || "tokyonight");
+
 // IZAKAYA_DEMO=1 keeps the o/t/e/c flashes but skips the real launches —
 // used by docs/demo.tape so recording the GIF doesn't spawn windows.
 const DEMO = !!process.env.IZAKAYA_DEMO;
@@ -438,7 +503,7 @@ const SEAT_FILE = path.join(os.homedir(), ".cache", "izakaya", "seat");
 // missing `recent`, say — would crash the first paint before the rescan could
 // heal it, so a mismatched cache is simply thrown out and rebuilt. Bump this
 // whenever a field is added to (or changed on) the repo object.
-const MENU_V = 3;
+const MENU_V = 4;
 
 function loadMenu() {
   if (DEMO) return null;
@@ -660,15 +725,12 @@ async function scanRepo(dirent) {
   repo.files = acc.files;
   repo.bytes = acc.bytes;
   const total = Object.values(acc.langs).reduce((a, b) => a + b, 0) || 1;
+  // names + percentages only — color and icon resolve at render (langMeta),
+  // so a cached plate never carries a stale theme's paint
   repo.langs = Object.entries(acc.langs)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
-    .map(([name, bytes]) => ({
-      name,
-      pct: (bytes / total) * 100,
-      color: Object.values(LANGS).find((l) => l.name === name)?.color || T.fgDim,
-      icon: Object.values(LANGS).find((l) => l.name === name)?.icon || "",
-    }));
+    .map(([name, bytes]) => ({ name, pct: (bytes / total) * 100 }));
 
   try {
     const pkg = JSON.parse(await fs.readFile(path.join(dir, "package.json"), "utf8"));
@@ -679,7 +741,7 @@ async function scanRepo(dirent) {
   for (const wf of ["wrangler.jsonc", "wrangler.json", "wrangler.toml"]) {
     try {
       await fs.access(path.join(dir, wf));
-      repo.chips.unshift({ label: " worker", color: T.orange });
+      repo.chips.unshift({ label: " worker", color: "orange" });
       break;
     } catch {}
   }
@@ -1092,9 +1154,8 @@ function listRow(repo, selected, W) {
   const accent = selected
     ? (state.focus === "menu" ? fg(T.blue) : fg(T.fgDim)) + "▌"
     : fg(T.bgPanel) + " ";
-  const icon = repo.langs[0]
-    ? fg(repo.langs[0].color) + repo.langs[0].icon
-    : fg(T.fgFaint) + G.folder;
+  const lm = repo.langs[0] && langMeta(repo.langs[0].name);
+  const icon = lm ? fg(lm.color) + lm.icon : fg(T.fgFaint) + G.folder;
   const stale =
     repo.isGit && repo.lastUnix > 0 && Date.now() / 1000 - repo.lastUnix > STALE_S;
   const nameC = selected ? fg(T.fg) + BOLD : stale ? fg(T.fgDim) : fg(T.fg);
@@ -1126,7 +1187,7 @@ function langBar(repo, width) {
     let w = Math.round((l.pct / 100) * width);
     if (i === repo.langs.length - 1) w = width - used;
     w = Math.max(1, Math.min(w, width - used));
-    s += fg(l.color) + "█".repeat(w);
+    s += fg(langMeta(l.name).color) + "█".repeat(w);
     used += w;
     if (used >= width) break;
   }
@@ -1139,21 +1200,22 @@ const OPEN_TAB_SHOWN = 12; // files listed on the tab before "+N more"
 // Position 0 is the index (staged), position 1 the worktree (unstaged); the
 // worktree side wins the color when both are dirty.
 const CHANGE_KINDS = {
-  M: { color: T.yellow, glyph: G.dot, label: "modified" },
-  A: { color: T.green, glyph: "+", label: "added" },
-  D: { color: T.red, glyph: "−", label: "deleted" },
-  R: { color: T.cyan, glyph: "→", label: "renamed" },
-  C: { color: T.cyan, glyph: "→", label: "copied" },
-  T: { color: T.magenta, glyph: G.dot, label: "typechange" },
-  U: { color: T.red, glyph: G.warn, label: "conflict" },
-  "?": { color: T.fgFaint, glyph: "?", label: "untracked" },
+  M: { color: "yellow", glyph: G.dot, label: "modified" },
+  A: { color: "green", glyph: "+", label: "added" },
+  D: { color: "red", glyph: "−", label: "deleted" },
+  R: { color: "cyan", glyph: "→", label: "renamed" },
+  C: { color: "cyan", glyph: "→", label: "copied" },
+  T: { color: "magenta", glyph: G.dot, label: "typechange" },
+  U: { color: "red", glyph: G.warn, label: "conflict" },
+  "?": { color: "fgFaint", glyph: "?", label: "untracked" },
 };
 function changeMark(xy) {
   const x = xy[0], y = xy[1];
   const kind =
     CHANGE_KINDS[y !== " " ? y : x] ||
-    { color: T.fgDim, glyph: G.dot, label: "changed" };
-  return { ...kind, staged: x !== " " && x !== "?" };
+    { color: "fgDim", glyph: G.dot, label: "changed" };
+  // colors live as T-key names so the lanterns can change; resolve here
+  return { ...kind, color: T[kind.color], staged: x !== " " && x !== "?" };
 }
 
 // a rename reads "old -> new"; the new name is what's on the tab now
@@ -1171,7 +1233,7 @@ function detailLines(repo, W, focusIdx = -1) {
 
   pad();
   // title ribbon, same shape as the prompt: ░▒▓  icon │ name │ path
-  const icon = repo.langs[0]?.icon || G.folder;
+  const icon = (repo.langs[0] && langMeta(repo.langs[0].name).icon) || G.folder;
   pad(
     "  " + fg(T.seg0) + "░▒▓" +
     bg(T.seg0) + fg("#090c0c") + ` ${icon} ` +
@@ -1332,7 +1394,7 @@ function detailLines(repo, W, focusIdx = -1) {
   pad(`  ${langBar(repo, barW)}`);
   const legend = repo.langs
     .filter((l) => l.pct >= 1)
-    .map((l) => `${fg(l.color)}${G.dot}${fg(T.fgDim)} ${l.name} ${Math.round(l.pct)}%`)
+    .map((l) => `${fg(langMeta(l.name).color)}${G.dot}${fg(T.fgDim)} ${l.name} ${Math.round(l.pct)}%`)
     .join("  ");
   pad(`  ${legend || fg(T.fgFaint) + "nothing on this plate yet"}`);
   pad();
@@ -1345,7 +1407,7 @@ function detailLines(repo, W, focusIdx = -1) {
     pad(
       "  " +
         repo.chips
-          .map((c) => bg(T.bgHi) + fg(c.color) + ` ${c.label} ` + RESET)
+          .map((c) => bg(T.bgHi) + fg(T[c.color] || c.color) + ` ${c.label} ` + RESET)
           .join(" ")
     );
   }
@@ -1623,6 +1685,7 @@ function helpFrame(W, H) {
     ["y", "copy the repo path — or the file's"],
     ["w", "move the bar — scan a different directory"],
     ["s", "sort: recent · name · size"],
+    ["T", "change the lanterns — tokyonight · iceberg · nord · catppuccin"],
     ["r", "rescan the kitchen"],
     ["~", "colophon — who keeps this bar"],
     ["q / esc", "またね"],
@@ -2211,6 +2274,14 @@ function onKey(buf) {
     state.sort = state.sort === "recent" ? "name" : state.sort === "name" ? "size" : "recent";
     applySort();
     return render();
+  }
+  if (k === "T") {
+    // change the lanterns — cycle the theme live and remember the choice
+    const names = Object.keys(THEMES);
+    const next = names[(names.indexOf(themeName) + 1) % names.length];
+    applyTheme(next);
+    if (!DEMO) saveConfig({ theme: next });
+    return flash(`${G.lantern} the lanterns change — ${next}`);
   }
   if (k === "r" && !state.scanning) {
     state.status = "";
