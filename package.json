@@ -1,10 +1,13 @@
 {
   "name": "izakaya",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "居酒屋 — a cozy TokyoNight TUI where your repos are the menu",
   "type": "module",
   "bin": {
     "izakaya": "bin/izakaya.js"
+  },
+  "scripts": {
+    "test": "node --test"
   },
   "engines": {
     "node": ">=22"

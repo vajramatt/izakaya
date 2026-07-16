@@ -1,0 +1,70 @@
+# 居酒屋 — keeping it honest. The zero-dependency rule applies to the app,
+# not to CI: unit tests taste the pure helpers on mac and Linux, and a pty
+# smoke test on Linux stages a tiny fake bar (the way scripts/demo.sh does,
+# but portable — demo.sh itself is BSD-flavored) and walks in the front door.
+# The Windows row waits for the Windows branch (ROADMAP.md).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  taste:
+    name: tasting flight (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: syntax
+        run: node --check bin/izakaya.js
+      - name: unit tests
+        run: node --test
+      - name: flags
+        run: |
+          node bin/izakaya.js --version
+          node bin/izakaya.js --help
+
+  smoke:
+    name: pty smoke render (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: stage a tiny bar
+        run: |
+          set -eu
+          BAR=/tmp/izakaya-smoke
+          mkdir -p "$BAR/ramen-stand/src" "$BAR/tofu-notes"
+          git config --global user.email ci@example.com
+          git config --global user.name ci
+          git config --global init.defaultBranch main
+          git -C "$BAR/ramen-stand" init -q
+          echo 'console.log("slurp")' > "$BAR/ramen-stand/src/index.js"
+          git -C "$BAR/ramen-stand" add -A
+          git -C "$BAR/ramen-stand" commit -qm "feat: first bowl"
+          echo 'not a repo' > "$BAR/tofu-notes/README.md"
+      - name: open the bar through a pty, browse, leave
+        env:
+          IZAKAYA_DEMO: "1"
+          XDG_CACHE_HOME: /tmp/izakaya-smoke-cache
+          XDG_CONFIG_HOME: /tmp/izakaya-smoke-config
+        run: |
+          set -eu
+          # 'script' lends the app a real pty; feed keys with pauses so the
+          # splash, the menu, and the farewell each get a frame. Two q's:
+          # the first ends the splash, the second says またね.
+          { sleep 4; printf 'j'; sleep 1; printf 'q'; sleep 1; printf 'q'; sleep 4; } \
+            | timeout 60 script -qec "node bin/izakaya.js /tmp/izakaya-smoke" /tmp/render.out
+          # the farewell line proves a full open→render→leave cycle
+          grep -q "またね" /tmp/render.out
+          # and the alt screen was restored on the way out
+          grep -q $'\x1b\[?1049l' /tmp/render.out

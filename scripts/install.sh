@@ -91,7 +91,7 @@ WRAPPER='
 # izakaya — sit down on the repo you picked (↵ in the bar)
 iz() {
   izakaya "$@"
-  local seat="$HOME/.cache/izakaya/seat"
+  local seat="${XDG_CACHE_HOME:-$HOME/.cache}/izakaya/seat"
   if [ -f "$seat" ]; then
     cd -- "$(cat "$seat")" && command rm -f -- "$seat"
   fi

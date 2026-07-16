@@ -91,6 +91,9 @@ root resolves in this order:
 
 Repeat visits open instantly on the last menu (cached per root in
 `~/.cache/izakaya/menu.json`) while every plate is re-checked in place.
+Scanning pours twice: a quick pass gets the whole menu up fast, then the
+deep history — the activity sparkline, the chefs, the AI tally — simmers
+in behind it.
 
 ## Keys
 
@@ -143,7 +146,9 @@ Browsing the menu works anywhere Node does. The launch keys (`o` `t` `e` `c`
 
 - **`o` open · `b` browser · `y` copy** — full parity on **macOS and Linux**.
   macOS uses `open` and `pbcopy`; Linux uses `xdg-open`, and for the clipboard
-  `wl-copy` (Wayland), `xclip`, or `xsel` — whichever you have installed.
+  `wl-copy` (Wayland), `xclip`, or `xsel` — whichever you have installed. With
+  none of them around, `y` asks the terminal itself via **OSC 52** — zero
+  processes, and it works over a bare SSH session too.
 - **`t` terminal · `e` editor · `c` claude** — spawn a new terminal window.
   - **inside tmux** (any platform), a new window means a **tmux window** at
     the repo — the bar meets you where you live, not over it.
@@ -196,14 +201,15 @@ Repos without git are still served, marked as off-menu items.
 ## The launcher — `iz()`
 
 izakaya can hand your shell the repo you picked. Press `↵` on a plate and
-the bar writes its path to `~/.cache/izakaya/seat` on the way out; a tiny
-wrapper turns that into a `cd`:
+the bar writes its path to the seat file (`~/.cache/izakaya/seat`, or under
+`$XDG_CACHE_HOME` if you set one) on the way out; a tiny wrapper turns that
+into a `cd`:
 
 ```zsh
 # ~/.zshrc
 iz() {
   izakaya "$@"
-  local seat="$HOME/.cache/izakaya/seat"
+  local seat="${XDG_CACHE_HOME:-$HOME/.cache}/izakaya/seat"
   if [[ -f "$seat" ]]; then
     cd -- "$(<"$seat")" && command rm -f -- "$seat"
   fi
@@ -222,7 +228,7 @@ For **fish**, the same idea in fish syntax (`~/.config/fish/config.fish`):
 ```fish
 function iz
     izakaya $argv
-    set -l seat "$HOME/.cache/izakaya/seat"
+    set -l seat (set -q XDG_CACHE_HOME; and echo $XDG_CACHE_HOME; or echo $HOME/.cache)/izakaya/seat
     if test -f "$seat"
         cd (cat "$seat"); and command rm -f -- "$seat"
     end
@@ -289,10 +295,12 @@ its own:
 
 - `~/.config/izakaya/config.json` — where your work lives, your `theme`,
   your optional `usual` session script, and (on Linux) an optional
-  `terminal` override
+  `terminal` override (`$XDG_CONFIG_HOME` respected)
 - `~/.cache/izakaya/menu.json` — the warm-start menu, keyed by root
 - `~/.cache/izakaya/sayings.json` — the kotowaza deck's cursor
 - `~/.cache/izakaya/seat` — the `↵` cd target the `iz()` wrapper consumes
+
+(the cache trio lives under `$XDG_CACHE_HOME/izakaya` when that's set)
 
 Everything else — Finder, terminal windows, the editor, Claude Code, the
 browser, the clipboard — is a launch, not a mutation.
@@ -307,6 +315,10 @@ The stills in the table up top are `Screenshot` frames from the same tape:
 ```sh
 ./scripts/demo.sh && vhs docs/demo.tape
 ```
+
+Hacking on the bar? `node --test` runs the tasting flight in `test/` — pure
+helpers only, still zero dependencies (`node:test` ships with node) — and CI
+runs it on macOS and Linux plus a pty smoke render of the real thing.
 
 ## Requirements
 

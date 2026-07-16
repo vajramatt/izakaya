@@ -51,13 +51,16 @@ renderer or scanner. It now dispatches per-OS through the `Platform` section
       reference build).
 - [x] Amend the "read-only by design" rule in `CLAUDE.md` — done, and a new
       rule documents the platform layer.
-- [ ] **OSC 52 for `y`.** Ask the terminal itself to set the clipboard via
-      escape sequence: zero processes spawned, works over SSH, supported by
-      Ghostty / Windows Terminal / most others. Would replace `pbcopy`,
-      `wl-copy`/`xclip`/`xsel`, and (later) `clip.exe` in one move — the
-      on-theme answer, and the obvious unifier once Windows lands.
-- [ ] Respect `XDG_CACHE_HOME` for `~/.cache/izakaya` (Linux nicety; macOS
-      behavior unchanged).
+- [x] **OSC 52 for `y`** — landed as the safety net rather than the whole
+      act: mac keeps `pbcopy` (reference build unchanged) and Linux still
+      prefers a native tool, but when nothing is installed the terminal
+      itself is asked via OSC 52 — so `y` now always lands, including over
+      bare SSH. Going OSC-52-first everywhere is still open; it waits on
+      confidence that the terminals people actually pair with izakaya all
+      accept clipboard writes (VTE-family terminals historically don't).
+- [x] Respect `XDG_CACHE_HOME` for the cache dir (Linux nicety; macOS
+      behavior unchanged). The `iz()` wrapper in the README and installer
+      resolves the same `${XDG_CACHE_HOME:-$HOME/.cache}` path.
 
 ## The Linux branch — landed, pending hardware QA
 
@@ -107,9 +110,12 @@ The renderer is fine; the work is launchers and the wrapper:
 
 ## Keeping it honest
 
-- [ ] A GitHub Actions matrix (ubuntu / windows) that stages a fake bar the
-      way `scripts/demo.sh` does and drives the binary through a pty for a
-      smoke render. The zero-dependency rule applies to the app, not CI.
+- [x] CI landed (`.github/workflows/ci.yml`): a ubuntu + macos matrix runs
+      `node --test` over the tasting flight in `test/` (pure helpers — width
+      math, fuzzy, scrubbers, input chunks), and a ubuntu job stages a tiny
+      bar and drives the binary through a pty (`script`) for a smoke render.
+      The zero-dependency rule applies to the app, not CI.
+- [ ] Add the windows row to the matrix once the Windows branch lands.
 
 ## Sequencing
 

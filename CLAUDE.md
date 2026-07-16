@@ -33,10 +33,12 @@ menu at a small Tokyo bar.
   housekeeping files. Examining a plate may also ask **read-only questions**
   of `gh` (open PRs, latest checks) when it's installed — queries only, never
   mutations. The housekeeping files: `~/.config/izakaya/config.json`
-  (the saved root, and an optional Linux `terminal` override), and in
-  `~/.cache/izakaya/` — `sayings.json` (kotowaza deck cursor), `menu.json`
-  (warm-start menu, keyed by root), `seat` (the `↵` cd target the `iz()` shell
-  wrapper consumes). Root resolution: CLI arg > `$IZAKAYA_ROOT` > saved config
+  (the saved root, and an optional Linux `terminal` override), and in the
+  cache dir (`$XDG_CACHE_HOME` or `~/.cache`, then `izakaya/`) —
+  `sayings.json` (kotowaza deck cursor), `menu.json` (warm-start menu, keyed
+  by root), `seat` (the `↵` cd target the `iz()` shell wrapper consumes; the
+  wrapper in the README and installer resolves the same XDG-or-`~/.cache`
+  path). Root resolution: CLI arg > `$IZAKAYA_ROOT` > saved config
   > ask on first visit.
 - **The launch keys are the only platform-aware code, and they live in one
   place.** All OS dispatch is in the `Platform` section (`isMac`/`isLinux`,
@@ -58,12 +60,22 @@ menu at a small Tokyo bar.
 
 - `bin/izakaya.js` — everything: theme → glyphs → width helpers → scanner →
   state → renderer → input. Keep that section order.
-- Scanning runs 4-wide concurrency, renders progressively as repos finish.
+- **Import-safe by contract.** The bar only opens behind `IS_MAIN`; importing
+  `bin/izakaya.js` (the tests do) must start no timers, touch no TTY, and
+  exit nothing. New module-scope side effects go inside the `IS_MAIN` gate,
+  and new pure helpers are fair game for the export block at the bottom.
+- Scanning pours twice: a cheap pass (4-wide) that gets every menu row up
+  fast, then an enrich pass for the history walks (sparkline, chefs, AI
+  tally). `ENRICH_KEYS` lists the second-pour fields; `cooked` marks a plate
+  whose history is current. Renders progressively through both.
 - Width math is ANSI-aware and CJK-aware (`visW`/`truncW`/`padW`) — any new
   rendering must go through those helpers or alignment breaks.
 
 ## Testing
 
-No test framework (zero deps). Verify by running it in a real terminal:
-resize the window, press every key in the footer, check a dirty repo, a
-non-git dir, and an empty-but-initialized repo render sanely.
+Still zero deps — `node:test` ships with node. `node --test` runs the
+tasting flight in `test/` over the pure helpers (width math, fuzzy match,
+scrubbers, input-chunk logic); CI (`.github/workflows/ci.yml`) runs it on
+mac + Linux plus a pty smoke render. The real terminal is still the law for
+everything rendered: resize the window, press every key in the footer, check
+a dirty repo, a non-git dir, and an empty-but-initialized repo render sanely.
