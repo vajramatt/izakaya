@@ -68,6 +68,12 @@ menu at a small Tokyo bar.
   fast, then an enrich pass for the history walks (sparkline, chefs, AI
   tally). `ENRICH_KEYS` lists the second-pour fields; `cooked` marks a plate
   whose history is current. Renders progressively through both.
+- **The takeout window** (`--report`, `--closing-time [--json]`) is the
+  headless path: same two pours, no TTY, prints and exits. It must stay
+  side-effect free — nothing written, not even the menu cache — and its
+  closing-time facts come from `closingFacts`, shared with the `!` scene so
+  the two can't drift. `--report`'s shape is a published schema (stamped
+  with `MENU_V`): changing a plate field means bumping `MENU_V`.
 - Width math is ANSI-aware and CJK-aware (`visW`/`truncW`/`padW`) — any new
   rendering must go through those helpers or alignment breaks.
 

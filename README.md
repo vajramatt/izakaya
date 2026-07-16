@@ -288,6 +288,37 @@ key snaps it back to business. And on the way out, `q` pours a parting
 kotowaza — dealt from a persistent shuffled deck, so you hear every saying
 once before any repeats.
 
+## The takeout window — for scripts, cron, and agents
+
+The bar is for people; the scanner is happy to serve anything that can read
+JSON. Two flags skip the TUI entirely — no TTY, no alt screen, and nothing
+written, not even the menu cache:
+
+```sh
+izakaya --report [root]          # the whole menu as one JSON document
+izakaya --closing-time [root]    # what dies with this laptop — plain text
+izakaya --closing-time --json    # the same sweep, structured
+```
+
+`--report` prints every plate the bar would serve — git status, the open
+tab, ahead/behind, unpushed pours, stashes, languages, stack chips, the
+Claude session age and AI-assisted share. The `schema` field mirrors the
+menu-cache version and bumps whenever a plate changes shape, so anything
+built on it can notice instead of break. An agent gets the answer to
+"which repos need attention, and where did Claude leave off?" in one call.
+
+`--closing-time` is the `!` scene to go: every plate carrying work only
+this machine holds. The exit code does the talking — `1` when something's
+at risk, `0` when the stove is clean, `2` when the root can't be read — so
+a cron line or an agent heartbeat can nag without parsing a thing:
+
+```sh
+izakaya --closing-time || say "the stove is still on"
+```
+
+Text output is colored on a TTY and plain in a pipe. Root resolution
+matches the bar: argument > `$IZAKAYA_ROOT` > saved config > `~/code`.
+
 ## Read-only, by design
 
 izakaya never writes to the repos it scans. The only files it touches are

@@ -20,7 +20,7 @@ const execFile = promisify(execFileCb);
 // nothing when installed — in which case the line is just the bare version.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const VERSION = "0.6.0";
+const VERSION = "0.7.0";
 
 function commit() {
   try {
@@ -490,12 +490,28 @@ if (ARGV.includes("--help") || ARGV.includes("-h")) {
       `  [query]       a bare word fuzzy-filters the menu; when exactly one\n` +
       `                plate matches, you're seated without the bar opening\n` +
       `                (the iz() wrapper cd's you straight there)\n` +
+      `  --report      the takeout window: scan every plate and print the\n` +
+      `                menu as JSON — no TTY needed, made for scripts and agents\n` +
+      `  --closing-time  work that exists only on this machine — dirty files,\n` +
+      `                stashes, unpushed pours, repos with no remote. Plain\n` +
+      `                text (add --json for data); exits 1 when plates are at\n` +
+      `                risk, 0 when the stove is clean\n` +
       `  -v, --version print the version and leave\n` +
       `  -h, --help    show this and leave\n\n` +
       `Once you're in, press ? for the keys. またね.\n`
   );
   process.exit(0);
 }
+
+// The takeout window — --report and --closing-time serve the scanner without
+// opening the bar. Parsed here with the other flags; poured at the bottom of
+// the file, once ROOT has resolved.
+const TAKEOUT = ARGV.includes("--report")
+  ? "report"
+  : ARGV.includes("--closing-time")
+    ? "closing-time"
+    : null;
+const TAKEOUT_JSON = ARGV.includes("--json");
 
 // A path-looking word (~/…, /…, ./…, or anything with a slash) is the root;
 // a bare word rides in as a fuzzy query — `iz ramen`.
@@ -928,8 +944,9 @@ const SPLASH_MIN_MS = 1600;
 let splashStart = Date.now();
 
 // The neon flows while the curtain is up: tick the gradient phase ~20fps.
-// (No timer when imported — a test run must be free to end.)
-const splashTimer = IS_MAIN
+// (No timer when imported — a test run must be free to end — and none at
+// the takeout window, where a splash frame would land in someone's pipe.)
+const splashTimer = IS_MAIN && !TAKEOUT
   ? setInterval(() => {
       if (state.splash) {
         state.phase += 0.016;
@@ -1137,6 +1154,139 @@ function moveBar(input) {
   applySort();
   void scanAll();
   return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The takeout window — --report and --closing-time serve the scan without
+// opening the bar: same two pours, no TTY, no alt screen, and side-effect
+// free (not even the menu cache is written). Made for pipes, cron, and
+// agents. Exit codes: --report always 0; --closing-time 0 when the stove is
+// clean, 1 when plates are at risk; both 2 when the root can't be read.
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function scanHeadless() {
+  let entries;
+  try {
+    entries = await fs.readdir(ROOT, { withFileTypes: true });
+  } catch (e) {
+    console.error(`izakaya: cannot read ${ROOT}: ${e.message}`);
+    process.exit(2);
+  }
+  const dirs = entries.filter((e) => e.isDirectory() && !e.name.startsWith("."));
+  const plates = [];
+  const queue = [...dirs];
+  await Promise.all(
+    Array.from({ length: 4 }, async () => {
+      while (queue.length) {
+        const d = queue.shift();
+        const repo = await scanRepo(d);
+        Object.assign(repo, await enrichRepo(repo));
+        plates.push(repo);
+      }
+    })
+  );
+  plates.sort((a, b) => b.lastUnix - a.lastUnix);
+  return plates;
+}
+
+// What leaves only with this laptop — the pure facts behind the ! scene and
+// the --closing-time takeout, so the two can never drift apart.
+// kinds: unsettled (dirty files) · unpushed (pours no remote has) ·
+// houseOnly (a repo that never left the house) · stashed
+function closingFacts(repos) {
+  const at = [];
+  for (const r of repos) {
+    if (!r.isGit) continue;
+    const facts = [];
+    if (r.dirty) facts.push({ kind: "unsettled", n: r.dirty });
+    if (r.remote && r.unpushed) facts.push({ kind: "unpushed", n: r.unpushed });
+    if (!r.remote && r.commits)
+      facts.push({ kind: "houseOnly", n: r.unpushed || r.commits });
+    if (r.stash) facts.push({ kind: "stashed", n: r.stash });
+    if (facts.length) at.push({ repo: r, facts });
+  }
+  at.sort(
+    ({ repo: a }, { repo: b }) =>
+      b.dirty + b.unpushed + b.stash - (a.dirty + a.unpushed + a.stash)
+  );
+  return at;
+}
+
+function printReport(plates) {
+  process.stdout.write(
+    JSON.stringify(
+      {
+        izakaya: VERSION,
+        schema: MENU_V, // bumped whenever a plate field changes shape
+        root: ROOT,
+        generatedAt: new Date().toISOString(),
+        plates,
+      },
+      null,
+      2
+    ) + "\n"
+  );
+  process.exit(0);
+}
+
+function printClosingTime(plates, asJson) {
+  const at = closingFacts(plates);
+  const gitCount = plates.filter((r) => r.isGit).length;
+  if (asJson) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          izakaya: VERSION,
+          root: ROOT,
+          generatedAt: new Date().toISOString(),
+          plates: gitCount,
+          atRisk: at.map(({ repo, facts }) => ({
+            name: repo.name,
+            dir: repo.dir,
+            facts,
+          })),
+          safe: gitCount - at.length,
+        },
+        null,
+        2
+      ) + "\n"
+    );
+    process.exit(at.length ? 1 : 0);
+  }
+  // human text — the lanterns light it on a TTY, a pipe gets it plain
+  const tty = !!process.stdout.isTTY;
+  const strip = (s) => (tty ? s : s.replace(ANSI_RE, ""));
+  const word = (f) =>
+    f.kind === "unsettled"
+      ? fg(T.yellow) + `${f.n} unsettled` + RESET
+      : f.kind === "unpushed"
+        ? fg(T.cyan) + `⇡${f.n} unpushed` + RESET
+        : f.kind === "houseOnly"
+          ? fg(T.magenta) + `${f.n} pour${f.n === 1 ? "" : "s"} live only here` + RESET
+          : fg(T.orange) + `${f.n} stashed` + RESET;
+  const lines = [];
+  if (!at.length) {
+    lines.push(
+      fg(T.green) + "the stove is clean" + RESET +
+        ` — every pour pushed, nothing unsettled, nothing stashed. おやすみ`
+    );
+  } else {
+    lines.push(
+      BOLD + `closing time` + RESET +
+        ` — what leaves only with this laptop (${ROOT.replace(os.homedir(), "~")})`
+    );
+    const nameW = Math.min(24, Math.max(...at.map(({ repo }) => visW(repo.name))));
+    for (const { repo, facts } of at)
+      lines.push(
+        `  ${padW(repo.name.slice(0, nameW), nameW)}  ` +
+          facts.map(word).join("  ·  ")
+      );
+    lines.push(
+      `${at.length} plate${at.length === 1 ? "" : "s"} at risk  ·  ${gitCount - at.length} safe`
+    );
+  }
+  process.stdout.write(strip(lines.join("\n")) + "\n");
+  process.exit(at.length ? 1 : 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1835,23 +1985,19 @@ function stoveFrame(W, H) {
     bg(T.bg) + " ".repeat(Math.max(0, Math.floor((W - visW(s)) / 2))) + s;
   const blank = bg(T.bg) + " ".repeat(W) + RESET;
 
-  const at = [];
-  for (const r of state.repos) {
-    if (!r.isGit) continue;
-    const facts = [];
-    if (r.dirty) facts.push(fg(T.yellow) + `${G.dot} ${r.dirty} unsettled`);
-    if (r.remote && r.unpushed)
-      facts.push(fg(T.cyan) + `${G.ahead}${r.unpushed} unpushed`);
-    if (!r.remote && r.commits) {
-      const n = r.unpushed || r.commits;
-      facts.push(fg(T.magenta) + `${G.sake} ${n} pour${n === 1 ? "" : "s"} live only here`);
-    }
-    if (r.stash) facts.push(fg(T.orange) + `${r.stash} stashed`);
-    if (facts.length) at.push([r, facts]);
-  }
-  at.sort(
-    ([a], [b]) => b.dirty + b.unpushed + b.stash - (a.dirty + a.unpushed + a.stash)
-  );
+  // the facts come from closingFacts — shared with --closing-time, so the
+  // scene and the takeout window always tell the same story
+  const KIND = {
+    unsettled: (n) => fg(T.yellow) + `${G.dot} ${n} unsettled`,
+    unpushed: (n) => fg(T.cyan) + `${G.ahead}${n} unpushed`,
+    houseOnly: (n) =>
+      fg(T.magenta) + `${G.sake} ${n} pour${n === 1 ? "" : "s"} live only here`,
+    stashed: (n) => fg(T.orange) + `${n} stashed`,
+  };
+  const at = closingFacts(state.repos).map(({ repo, facts }) => [
+    repo,
+    facts.map((f) => KIND[f.kind](f.n)),
+  ]);
 
   const body = [];
   body.push(
@@ -2536,7 +2682,7 @@ const IDLE_MS = 30_000;
 let lastInput = Date.now();
 let ambientTick = 0;
 
-if (IS_MAIN)
+if (IS_MAIN && !TAKEOUT)
   setInterval(() => {
     if (
       state.splash || state.leaving || state.asking || state.stove ||
@@ -2758,6 +2904,20 @@ async function openGhosttyWindow(dir, cmd) {
 
 if (IS_MAIN) {
 
+// The takeout window goes first — scan, print, leave. No TTY, no alt
+// screen, no seat, no cache written. (Top-level await: the module IS the
+// program here.)
+if (TAKEOUT) {
+  // `--report | head` closes the pipe early — that's fine, leave quietly
+  process.stdout.on("error", (e) => {
+    if (e.code === "EPIPE") process.exit(0);
+    throw e;
+  });
+  const plates = await scanHeadless();
+  if (TAKEOUT === "report") printReport(plates);
+  else printClosingTime(plates, TAKEOUT_JSON);
+}
+
 // `iz ramen` — the query rides in ahead of the bar. If last visit's menu
 // knows exactly one plate that answers (or one exact name), skip the TUI
 // entirely: write the seat and let the iz() wrapper cd you there. Anything
@@ -2831,6 +2991,6 @@ export {
   fuzzyScore, relTime, fmtBytes,
   changeMark, changePath, scrubRemote,
   expandHome, shq, isPaste, printable, chopChar,
-  applyTheme, gradColor, langMeta,
+  applyTheme, gradColor, langMeta, closingFacts,
   THEMES, T, LANGS, G,
 };
