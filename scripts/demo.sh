@@ -8,6 +8,17 @@ set -euo pipefail
 DEMO="${1:-/tmp/izakaya-demo}"
 rm -rf "$DEMO"
 mkdir -p "$DEMO"
+DEMO_CONFIG="/tmp/izakaya-demo-config"
+rm -rf "$DEMO_CONFIG"
+mkdir -p "$DEMO_CONFIG/izakaya"
+cat > "$DEMO_CONFIG/izakaya/config.json" <<'EOF'
+{
+  "agents": [
+    { "id": "qwen", "label": "Qwen Code", "command": "qwen" },
+    { "id": "kimi", "label": "Kimi CLI", "command": "kimi" }
+  ]
+}
+EOF
 
 # git commit with a fake author and a backdated timestamp
 ci() { # ci <dir> <author> <hours-ago> <message>

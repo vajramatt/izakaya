@@ -53,6 +53,7 @@ before(async () => {
   const miso = path.join(bar, "miso-repo");
   await fs.mkdir(path.join(miso, "src"), { recursive: true });
   await git(miso, "init", "-q");
+  await fs.writeFile(path.join(miso, "AGENTS.md"), "# shared house rules\n");
   await fs.writeFile(path.join(miso, "src", "index.js"), 'console.log("miso")\n');
   await git(miso, "add", "-A");
   await git(miso, "commit", "-qm", "feat: first bowl");
@@ -106,6 +107,8 @@ test("--report: the whole menu as JSON, exit 0", async () => {
   assert.equal(miso.dirty, 1);
   assert.equal(miso.commits, 1);
   assert.equal(miso.cooked, true); // both pours land before the takeout prints
+  assert.deepEqual(miso.agents, []); // hermetic temp path has no local sessions
+  assert.equal(miso.hasAgentsMd, true);
   assert.equal(miso.changes[0].xy, "??");
   assert.equal(miso.lastMsg, "feat: first bowl");
 

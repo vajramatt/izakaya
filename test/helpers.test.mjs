@@ -19,6 +19,7 @@ import {
   changeMark, changePath, scrubRemote,
   expandHome, shq, isPaste, printable, chopChar,
   applyTheme, langMeta,
+  agentDefinitions, codexSessionMeta,
   THEMES, T, LANGS,
 } from "../bin/izakaya.js";
 
@@ -200,4 +201,28 @@ test("langMeta: resolves names to the live theme, unknowns stay dim", () => {
   assert.equal(langMeta("TypeScript").color, T[LANGS.ts.color]);
   assert.equal(langMeta("Klingon").color, T.fgDim);
   assert.equal(langMeta("Klingon").icon, ""); // callers draw their own fallback
+});
+
+// ── agent adapters ──────────────────────────────────────────────────────────
+
+test("agentDefinitions: built-ins stay stable and custom launchers are sanitized", () => {
+  const agents = agentDefinitions({
+    agents: [
+      { id: "qwen", label: "Qwen Code", command: "qwen", resume: "qwen --continue" },
+      { id: "claude", label: "Impostor", command: "nope" },
+      { label: "Kimi CLI", command: "kimi" },
+      { label: "Broken" },
+    ],
+  });
+  assert.deepEqual(agents.slice(0, 2).map((a) => a.id), ["claude", "codex"]);
+  assert.deepEqual(agents.slice(2).map((a) => a.id), ["qwen", "kimi-cli"]);
+  assert.equal(agents.find((a) => a.id === "qwen").resume, "qwen --continue");
+});
+
+test("codexSessionMeta: reads cwd from session metadata without needing the whole JSONL", () => {
+  assert.deepEqual(
+    codexSessionMeta('{"type":"session_meta","payload":{"cwd":"/code/ramen\\u0020bar","more":"…"'),
+    { cwd: "/code/ramen bar" }
+  );
+  assert.equal(codexSessionMeta('{"type":"response_item"}'), null);
 });

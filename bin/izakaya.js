@@ -20,7 +20,7 @@ const execFile = promisify(execFileCb);
 // nothing when installed — in which case the line is just the bare version.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const VERSION = "0.7.0";
+const VERSION = "0.8.0";
 
 function commit() {
   try {
@@ -181,6 +181,7 @@ const G = {
   term: "",
   edit: "",
   claude: "✳",
+  agent: "◆",
   search: "",
   tag: "",
   users: "",
@@ -469,6 +470,77 @@ function saveConfig(patch) {
   } catch {}
 }
 
+// Agents are adapters, not a house allegiance. Built-ins know how to find
+// their own local sessions; user-defined adapters only launch commands from
+// izakaya's global config (never from a repo being browsed).
+const BUILTIN_AGENTS = [
+  { id: "claude", label: "Claude Code", command: "claude", resume: "claude --continue", icon: "claude" },
+  { id: "codex", label: "Codex", command: "codex", resume: "codex resume --last", icon: "agent" },
+];
+
+function agentDefinitions(config = loadConfig()) {
+  const agents = [...BUILTIN_AGENTS];
+  const seen = new Set(agents.map((a) => a.id));
+  if (!Array.isArray(config.agents)) return agents;
+  for (const raw of config.agents) {
+    if (!raw || typeof raw !== "object") continue;
+    const label = typeof raw.label === "string" ? raw.label.trim().slice(0, 40) : "";
+    const command = typeof raw.command === "string" ? raw.command.trim() : "";
+    const id = (typeof raw.id === "string" ? raw.id : label)
+      .toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-|-$/g, "").slice(0, 32);
+    if (!id || !label || !command || seen.has(id)) continue;
+    const resume = typeof raw.resume === "string" && raw.resume.trim()
+      ? raw.resume.trim()
+      : null;
+    agents.push({ id, label, command, resume, icon: "agent", custom: true });
+    seen.add(id);
+  }
+  return agents;
+}
+
+function codexSessionMeta(text) {
+  const cwdMatch = text.match(/"cwd"\s*:\s*("(?:\\.|[^"\\])*")/);
+  if (!cwdMatch) return null;
+  try {
+    return { cwd: JSON.parse(cwdMatch[1]) };
+  } catch {
+    return null;
+  }
+}
+
+let codexSessionsPromise;
+async function codexSessionIndex() {
+  if (codexSessionsPromise) return codexSessionsPromise;
+  codexSessionsPromise = (async () => {
+    const found = new Map();
+    const walk = async (dir) => {
+      let entries;
+      try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+      for (const entry of entries) {
+        const file = path.join(dir, entry.name);
+        if (entry.isDirectory()) { await walk(file); continue; }
+        if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+        let handle;
+        try {
+          handle = await fs.open(file, "r");
+          const buf = Buffer.alloc(32768);
+          const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+          const meta = codexSessionMeta(buf.toString("utf8", 0, bytesRead));
+          if (!meta?.cwd) continue;
+          const st = await handle.stat();
+          const unix = Math.floor(st.mtimeMs / 1000);
+          found.set(path.resolve(meta.cwd), Math.max(found.get(path.resolve(meta.cwd)) || 0, unix));
+        } catch {} finally {
+          try { await handle?.close(); } catch {}
+        }
+      }
+    };
+    await walk(path.join(os.homedir(), ".codex", "sessions"));
+    return found;
+  })();
+  return codexSessionsPromise;
+}
+
 const expandHome = (p) =>
   p === "~" ? os.homedir() : p.replace(/^~\//, os.homedir() + "/");
 
@@ -530,7 +602,7 @@ const FIRST_VISIT = !ARG_ROOT && !loadConfig().root;
 // light. (T cycles them live once the bar is open.)
 applyTheme(process.env.IZAKAYA_THEME || loadConfig().theme || "tokyonight");
 
-// IZAKAYA_DEMO=1 keeps the o/t/e/c flashes but skips the real launches —
+// IZAKAYA_DEMO=1 keeps launch flashes but skips the real launches —
 // used by docs/demo.tape so recording the GIF doesn't spawn windows.
 const DEMO = !!process.env.IZAKAYA_DEMO;
 
@@ -545,7 +617,7 @@ const SEAT_FILE = path.join(CACHE_DIR, "seat");
 // missing `recent`, say — would crash the first paint before the rescan could
 // heal it, so a mismatched cache is simply thrown out and rebuilt. Bump this
 // whenever a field is added to (or changed on) the repo object.
-const MENU_V = 7;
+const MENU_V = 8;
 
 function loadMenu() {
   if (DEMO) return null;
@@ -657,8 +729,9 @@ async function scanRepo(dirent, base = ROOT, depth = 0) {
     chips: [],
     version: null,
     ai: null,
-    claudeUnix: 0, // newest Claude Code session touch for this repo
+    agents: [], // local agent sessions associated with this exact path
     hasClaudeMd: false,
+    hasAgentsMd: false,
     readmeTitle: null,
     recent: [],
     weeks: new Array(12).fill(0),
@@ -738,6 +811,10 @@ async function scanRepo(dirent, base = ROOT, depth = 0) {
     await fs.access(path.join(dir, "CLAUDE.md"));
     repo.hasClaudeMd = true;
   } catch {}
+  try {
+    await fs.access(path.join(dir, "AGENTS.md"));
+    repo.hasAgentsMd = true;
+  } catch {}
 
   // Who's at the bar right now — a Claude Code session dir for this repo
   // means Claude has sat here before. The path encoding mirrors Claude
@@ -755,7 +832,12 @@ async function scanRepo(dirent, base = ROOT, depth = 0) {
         if (st.mtimeMs > latest) latest = st.mtimeMs;
       } catch {}
     }
-    if (latest) repo.claudeUnix = Math.floor(latest / 1000);
+    if (latest) repo.agents.push({ id: "claude", lastUnix: Math.floor(latest / 1000) });
+  } catch {}
+
+  try {
+    const lastUnix = (await codexSessionIndex()).get(path.resolve(dir));
+    if (lastUnix) repo.agents.push({ id: "codex", lastUnix });
   } catch {}
 
   for (const rm of ["README.md", "readme.md", "README"]) {
@@ -918,6 +1000,7 @@ const state = {
   askErr: "",
   ambient: "", // the bar quietly lives when you've been idle a while
   stove: null, // closing time — {scroll} while the sweep is on screen
+  agentPicker: null, // {repoDir, sel} — choose an agent for the exact plate
   colophon: false,
   leaving: false,
   saying: null,
@@ -1069,6 +1152,7 @@ let scanGen = 0;
 
 async function scanAll() {
   const gen = ++scanGen;
+  codexSessionsPromise = undefined; // a rescan should notice newly opened sessions
   state.scanning = true;
   state.enriching = false;
   // Warm starts keep the cached menu on screen and refresh plates in place;
@@ -1417,7 +1501,7 @@ function footerLine(W) {
         ["o", "open"],
         ["t", "term"],
         ["e", "edit"],
-        ["c", "claude"],
+        ["a", "agent"],
         ["s", `sort:${state.sort}`],
         ["!", "closing time"],
         ["?", "more"],
@@ -1726,47 +1810,52 @@ function detailLines(repo, W, focusIdx = -1) {
     );
   }
 
-  if (repo.ai || repo.claudeUnix) {
+  if (repo.ai) {
     pad();
     pad(rule("the hand behind the bar"));
-    if (repo.ai) {
-      const a = repo.ai;
-      const pct = a.total ? Math.round((a.assisted / a.total) * 100) : 0;
+    const a = repo.ai;
+    const pct = a.total ? Math.round((a.assisted / a.total) * 100) : 0;
+    pad(
+      `  ${fg(T.magenta)}${G.claude} ${fg(T.fg)}Claude${fg(T.fgDim)} had a hand in ` +
+        `${fg(T.fg)}${pct}%${fg(T.fgDim)} of the last ${a.total} ` +
+        `${a.total === 1 ? "pour" : "pours"}  ${fg(T.fgFaint)}(${a.assisted} ` +
+        `commit${a.assisted === 1 ? "" : "s"})`
+    );
+    const shown = a.models.slice(0, 4);
+    const extra = a.models.length - shown.length;
+    let tags = shown
+      .map(
+        (m) =>
+          bg(T.bgHi) + fg(T.magenta) + ` ${m.label} ` +
+          (m.count > 1 ? fg(T.fgFaint) + `${m.count} ` : "") + RESET
+      )
+      .join(" ");
+    if (extra > 0) tags += " " + fg(T.fgFaint) + `+${extra} more`;
+    pad();
+    pad("  " + tags);
+  }
+
+  if (repo.agents?.length) {
+    const defs = new Map(agentDefinitions().map((a) => [a.id, a]));
+    pad();
+    pad(rule("agents at the bar"));
+    for (const session of repo.agents) {
+      const agent = defs.get(session.id) || { label: session.id, icon: "agent" };
       pad(
-        `  ${fg(T.magenta)}${G.claude} ${fg(T.fg)}Claude${fg(T.fgDim)} had a hand in ` +
-          `${fg(T.fg)}${pct}%${fg(T.fgDim)} of the last ${a.total} ` +
-          `${a.total === 1 ? "pour" : "pours"}  ${fg(T.fgFaint)}(${a.assisted} ` +
-          `commit${a.assisted === 1 ? "" : "s"})`
-      );
-      const shown = a.models.slice(0, 4);
-      const extra = a.models.length - shown.length;
-      let tags = shown
-        .map(
-          (m) =>
-            bg(T.bgHi) + fg(T.magenta) + ` ${m.label} ` +
-            (m.count > 1 ? fg(T.fgFaint) + `${m.count} ` : "") + RESET
-        )
-        .join(" ");
-      if (extra > 0) tags += " " + fg(T.fgFaint) + `+${extra} more`;
-      pad();
-      pad("  " + tags);
-    }
-    if (repo.claudeUnix) {
-      if (repo.ai) pad();
-      pad(
-        `  ${fg(T.magenta)}${G.claude} ${fg(T.fg)}a tab is open here` +
-          `${fg(T.fgDim)} — last spoke ${relTime(repo.claudeUnix)}` +
-          `  ·  ${fg(T.magenta)}C${fg(T.fgDim)} picks it back up`
+        `  ${fg(T.magenta)}${G[agent.icon] || G.agent} ${fg(T.fg)}${agent.label}` +
+          `${fg(T.fgDim)} last spoke ${relTime(session.lastUnix)}`
       );
     }
+    pad(`  ${fg(T.fgFaint)}press ${fg(T.magenta)}a${fg(T.fgFaint)} to start or resume an agent here`);
   }
 
   pad();
-  pad(
-    repo.hasClaudeMd
-      ? `  ${fg(T.green)}${G.ok} CLAUDE.md ${fg(T.fgFaint)}— house rules posted`
-      : `  ${fg(T.red)}${G.warn} no CLAUDE.md ${fg(T.fgFaint)}— this kitchen has no rules`
-  );
+  if (repo.hasAgentsMd)
+    pad(`  ${fg(T.green)}${G.ok} AGENTS.md ${fg(T.fgFaint)}— shared house rules posted`);
+  if (repo.hasClaudeMd)
+    pad(`  ${fg(T.green)}${G.ok} CLAUDE.md ${fg(T.fgFaint)}— Claude's house rules posted`);
+  if (!repo.hasAgentsMd && !repo.hasClaudeMd)
+    pad(`  ${fg(T.red)}${G.warn} no agent instructions ${fg(T.fgFaint)}— this kitchen has no posted rules`);
 
   if (repo.readmeTitle) {
     pad();
@@ -1973,6 +2062,49 @@ function askFrame(W, H) {
 
 // The back page of the menu — every key, including the ones the footer
 // doesn't have room for.
+function agentFrame(W, H) {
+  const center = (s) =>
+    bg(T.bg) + " ".repeat(Math.max(0, Math.floor((W - visW(s)) / 2))) + s;
+  const blank = bg(T.bg) + " ".repeat(W) + RESET;
+  const repo = state.agentPicker && findRepo(state.agentPicker.repoDir);
+  const agents = agentDefinitions();
+  const sessions = new Map((repo?.agents || []).map((s) => [s.id, s]));
+  if (state.agentPicker)
+    state.agentPicker.sel = Math.max(0, Math.min(agents.length - 1, state.agentPicker.sel));
+  const nameW = Math.max(12, ...agents.map((a) => visW(a.label)));
+  const body = [
+    center(fg(T.seg1) + BOLD + `${G.agent} who is pulling up a stool?`) + RESET,
+    blank,
+    center(truncW(
+      fg(T.fgDim) + `at ${fg(T.fg)}${repo?.dir?.replace(os.homedir(), "~") || "this plate"}`,
+      W - 8
+    )) + RESET,
+    blank,
+  ];
+  for (let i = 0; i < agents.length; i++) {
+    const agent = agents[i];
+    const session = sessions.get(agent.id);
+    const selected = i === state.agentPicker?.sel;
+    const installed = agent.custom || hasBin(agent.command.split(/\s+/)[0]);
+    const status = !installed
+      ? `${fg(T.red)}not installed`
+      : session
+        ? `${fg(T.teal)}resume · ${relTime(session.lastUnix)}`
+        : `${fg(T.fgDim)}start fresh`;
+    body.push(center(
+      (selected ? bg(T.bgHi) + fg(T.orange) + BOLD + " › " : bg(T.bg) + fg(T.fgDim) + "   ") +
+      `${G[agent.icon] || G.agent} ${padW(agent.label, nameW)}  ${status} ` + RESET
+    ));
+  }
+  body.push(blank);
+  body.push(center(fg(T.fgFaint) + "↑/↓ choose  ·  enter smart open  ·  n new  ·  r resume  ·  esc close") + RESET);
+  const top = Math.max(0, Math.floor((H - body.length) / 2));
+  return Array.from({ length: H }, (_, i) => {
+    const line = body[i - top];
+    return line ? padW(line + bg(T.bg), W) + RESET : blank;
+  });
+}
+
 function helpFrame(W, H) {
   const center = (s) =>
     bg(T.bg) + " ".repeat(Math.max(0, Math.floor((W - visW(s)) / 2))) + s;
@@ -1994,8 +2126,9 @@ function helpFrame(W, H) {
     ["t", "terminal window at the repo"],
     ["u", "the usual — your own session script, launched at the repo"],
     ["e", "$EDITOR at the repo — or at the file under the cursor"],
+    ["a", "choose an agent — start fresh or resume at this exact repo"],
     ["c", "claude code at the repo"],
-    ["C", "resume the claude session there — claude --continue"],
+    ["C", "resume Claude there (compatibility shortcut)"],
     ["b", "open the remote in the browser"],
     ["y", "copy the repo path — or the file's"],
     ["w", "move the bar — scan a different directory"],
@@ -2163,6 +2296,11 @@ function render() {
 
   if (state.help) {
     out.write("\x1b[H" + helpFrame(W, H).join("\r\n"));
+    return;
+  }
+
+  if (state.agentPicker) {
+    out.write("\x1b[H" + agentFrame(W, H).join("\r\n"));
     return;
   }
 
@@ -2519,6 +2657,32 @@ function onKey(buf) {
     return render();
   }
 
+  if (state.agentPicker) {
+    const agents = agentDefinitions();
+    if (k === "\x1b" || k === "q") {
+      state.agentPicker = null;
+      return render();
+    }
+    if (k === "j" || k === "\x1b[B") {
+      state.agentPicker.sel = Math.min(agents.length - 1, state.agentPicker.sel + 1);
+      return render();
+    }
+    if (k === "k" || k === "\x1b[A") {
+      state.agentPicker.sel = Math.max(0, state.agentPicker.sel - 1);
+      return render();
+    }
+    if (k === "\r" || k === "\n" || k === "n" || k === "r") {
+      const repo = findRepo(state.agentPicker.repoDir);
+      const agent = agents[state.agentPicker.sel];
+      const hasSession = !!repo?.agents?.some((s) => s.id === agent?.id);
+      const resume = k === "r" || ((k === "\r" || k === "\n") && hasSession);
+      state.agentPicker = null;
+      if (repo && agent) return launchAgent(repo, agent, resume);
+      return render();
+    }
+    return;
+  }
+
   if (state.colophon) {
     state.colophon = false;
     return render();
@@ -2711,6 +2875,10 @@ function onKey(buf) {
 
   const sel = visible()[state.sel];
   if (!sel) return;
+  if (k === "a") {
+    state.agentPicker = { repoDir: sel.dir, sel: 0 };
+    return render();
+  }
   // behind the bar with a file under the cursor, the keys narrow their aim:
   // ↵ peeks the pour, e edits that file, y copies its path, o reveals it.
   // Out front they keep working on the whole plate, exactly as before.
@@ -2753,15 +2921,12 @@ function onKey(buf) {
     }
     openAtRepo(sel, "exec ${EDITOR:-vim} .", `${G.edit} editing ${sel.name}`);
   }
-  if (k === "c") openAtRepo(sel, "exec claude", `${G.claude} claude is at the bar — ${sel.name}`);
+  if (k === "c") launchAgent(sel, BUILTIN_AGENTS[0], false);
   if (k === "C") {
-    // resume, not restart — only offered where a session actually exists
-    if (!sel.claudeUnix)
+    // compatibility shortcut: the neutral picker is `a`, but c/C stay muscle memory
+    if (!sel.agents?.some((a) => a.id === "claude"))
       return flash(`${G.claude} no claude session at this plate — c starts one`);
-    openAtRepo(
-      sel, "exec claude --continue",
-      `${G.claude} claude picks up where you left off — ${sel.name}`
-    );
+    launchAgent(sel, BUILTIN_AGENTS[0], true);
   }
   if (k === "\r" || k === "\n") {
     // sit down: leave the seat for the iz() wrapper to cd into (see README)
@@ -2793,6 +2958,22 @@ function openAtRepo(sel, inner, okMsg) {
   if (DEMO || openTerminal(sel.dir, inner)) return flash(okMsg);
   if (hasBin("xdg-open")) spawnDetached("xdg-open", [sel.dir]);
   flash(`${G.term} no terminal — set $IZAKAYA_TERMINAL or terminal in config (README); opened folder`);
+}
+
+function launchAgent(repo, agent, resume = false) {
+  const binary = agent.command.split(/\s+/)[0];
+  if (!agent.custom && !hasBin(binary))
+    return flash(`${G.agent} ${agent.label} is not installed`);
+  if (resume && !agent.custom && !repo.agents?.some((s) => s.id === agent.id))
+    return flash(`${G.agent} no ${agent.label} session at this plate — n starts one`);
+  if (resume && !agent.resume)
+    return flash(`${G.agent} ${agent.label} has no resume command on file`);
+  const command = resume ? agent.resume : agent.command;
+  openAtRepo(
+    repo,
+    `exec ${command}`,
+    `${G[agent.icon] || G.agent} ${agent.label} ${resume ? "picks up the thread" : "pulls up a stool"} — ${repo.name}`
+  );
 }
 
 let flashTimer;
@@ -3130,5 +3311,6 @@ export {
   changeMark, changePath, scrubRemote,
   expandHome, shq, isPaste, printable, chopChar,
   applyTheme, gradColor, langMeta, closingFacts,
+  agentDefinitions, codexSessionMeta,
   THEMES, T, LANGS, G,
 };

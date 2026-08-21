@@ -16,7 +16,7 @@ Set Padding 12
 Set Theme { "background": "#1a1b26", "foreground": "#c0caf5" }
 
 Hide
-Type "IZAKAYA_DEMO=1 node bin/izakaya.js /tmp/izakaya-demo"
+Type "XDG_CONFIG_HOME=/tmp/izakaya-demo-config IZAKAYA_DEMO=1 node bin/izakaya.js /tmp/izakaya-demo"
 Show
 
 Enter
@@ -48,6 +48,16 @@ Down
 Sleep 1.2s
 Up
 Sleep 1.2s
+Screenshot docs/screens/nested.png
+# agents follow the highlighted child, too: open the picker, move from
+# Claude Code to Codex, then start it at this exact nested path
+Type "a"
+Sleep 1.6s
+Down
+Sleep 1.2s
+Screenshot docs/screens/agents.png
+Type "n"
+Sleep 1.8s
 Type "t"
 Sleep 1.5s
 Left
@@ -103,10 +113,6 @@ Type "d"
 Sleep 1.5s
 Type "d"
 Sleep 800ms
-
-# a claude session at the bar (IZAKAYA_DEMO suppresses the real launch)
-Type "c"
-Sleep 1.8s
 
 # またね — the farewell scene plays, then auto-exits
 Type "q"

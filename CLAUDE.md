@@ -26,14 +26,15 @@ menu at a small Tokyo bar.
   the data.
 - **Read-only by design.** izakaya never mutates the repos it scans. The only
   side effects allowed are launches: `o` (file manager), `t` (terminal window
-  at the repo), `e` (editor), `c` (Claude Code), `C` (resume the Claude
-  session), `u` (the usual — the user's own session script, taken **only**
+  at the repo), `e` (editor), `a` (agent picker), `c`/`C` (Claude compatibility
+  shortcuts), `u` (the usual — the user's own session script, taken **only**
   from their env/config, never auto-discovered inside a scanned repo), `b`
   (remote in browser), `y` (clipboard) — plus its own
   housekeeping files. Examining a plate may also ask **read-only questions**
   of `gh` (open PRs, latest checks) when it's installed — queries only, never
   mutations. The housekeeping files: `~/.config/izakaya/config.json`
-  (the saved root, and an optional Linux `terminal` override), and in the
+  (the saved root, optional agent launchers, and an optional Linux `terminal`
+  override), and in the
   cache dir (`$XDG_CACHE_HOME` or `~/.cache`, then `izakaya/`) —
   `sayings.json` (kotowaza deck cursor), `menu.json` (warm-start menu, keyed
   by root), `seat` (the `↵` cd target the `iz()` shell wrapper consumes; the

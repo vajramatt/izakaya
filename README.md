@@ -4,14 +4,14 @@
 
 ![izakaya browsing a demo bar: gradient splash, fuzzy filter, the diff peek, closing time](docs/demo.gif)
 
-| the menu | peek the pour | closing time |
-| --- | --- | --- |
-| ![the menu — repos as plates, one selected with its full detail](docs/screens/menu.png) | ![peek — a changed file's diff, poured behind the bar](docs/screens/peek.png) | ![closing time — every plate carrying work only this machine holds](docs/screens/closing-time.png) |
+| the menu | nested projects | agent picker | closing time |
+| --- | --- | --- | --- |
+| ![the menu — repos as plates, one selected with its full detail](docs/screens/menu.png) | ![nested projects — child projects beneath their parent](docs/screens/nested.png) | ![agent picker — Claude Code, Codex, Qwen Code, and Kimi CLI at the selected path](docs/screens/agents.png) | ![closing time — every plate carrying work only this machine holds](docs/screens/closing-time.png) |
 
 A zero-dependency TokyoNight TUI that scans every project in your code
 directory and serves them up as small plates: git status, last pour (commit),
-languages, stack chips, size — and whether the kitchen has posted its house
-rules (`CLAUDE.md`).
+languages, stack chips, size — and whether the kitchen has posted agent house
+rules (`AGENTS.md` or `CLAUDE.md`).
 
 It's built to answer the three questions a work morning starts with:
 
@@ -22,7 +22,7 @@ It's built to answer the three questions a work morning starts with:
   machine, down to the stash you forgot and the branch that never got pushed.
 - **Take me there.** `iz ramen` from the shell seats you in the repo before
   the bar even opens; inside, `↵` on a changed file pours its diff, and one
-  key opens the terminal, editor, or Claude Code session where you left it.
+  key opens the terminal, editor, or whichever coding agent you work with.
 
 The header is styled after the Starship TokyoNight prompt, so it looks like
 the rest of the terminal it lives in. One file, no packages, no build step,
@@ -135,10 +135,10 @@ same parent selected. Its children can then appear even when their names do not
 match the original query.
 
 Every action uses the highlighted row's exact path. `t` opens a terminal there;
-`e` opens the editor there; `c` starts Claude Code there; `o` opens it in the
+`e` opens the editor there; `a` opens the agent picker there; `o` opens it in the
 file manager; and `y` copies its path. `↵` leaves the seat file for the `iz()`
 shell wrapper so your current shell can `cd` there. The other repo-aware keys,
-including `u`, `C`, and `b`, target the highlighted child in the same way.
+including `u`, `c`/`C`, and `b`, target the highlighted child in the same way.
 
 The scan is lazy, so nested trees do not slow the initial menu. Dot-directories
 and generated or vendor folders such as `.git`, `node_modules`, `dist`,
@@ -167,8 +167,9 @@ which directories count as projects.
 | `t` | new terminal window at the selected repo or subfolder |
 | `u` | the usual — your own session script, launched at the repo ([see below](#the-usual--bring-your-own-session)) |
 | `e` | open the repo in `$EDITOR` (vim by default) in a new terminal window — behind the bar, open the file |
-| `c` | start a Claude Code session at the repo in a new terminal window |
-| `C` | resume the Claude session there (`claude --continue`) — the plate says when Claude last spoke |
+| `a` | choose an agent for this exact path; `↵` smart-opens, `n` starts fresh, `r` resumes |
+| `c` | start Claude Code directly (compatibility shortcut) |
+| `C` | resume Claude directly (compatibility shortcut) |
 | `b` | open the repo's remote in the browser |
 | `y` | copy the repo's path — behind the bar, the file's |
 | `w` | move the bar — scan a different directory |
@@ -191,9 +192,54 @@ a plate (`→`) quietly asks the street about it: open PRs and the latest
 checks appear under the remote. Lazy — only the plate you examine — and
 silent when `gh` is missing, signed out, or the remote isn't GitHub.
 
+### Agents — bring whoever you work with
+
+Press `a` on any highlighted repo or nested folder. The picker opens for that
+exact path, with **Claude Code** and **Codex** built in. Use `↑` / `↓` to choose:
+
+- `↵` is the smart choice: resume when izakaya sees a session at this path,
+  otherwise start fresh
+- `n` always starts a fresh session
+- `r` explicitly resumes; `esc` closes the picker
+
+Izakaya reads only local session metadata to show who last spoke. Claude Code
+sessions are matched from `~/.claude/projects`; Codex sessions are matched by
+the `cwd` in `~/.codex/sessions`. It never reads conversation content. Starting
+or resuming happens in a new terminal (or tmux window) with the selected path as
+the working directory. The built-in commands are `claude`,
+`claude --continue`, `codex`, and `codex resume --last`.
+
+The picker is deliberately open-ended. Add Qwen Code, Kimi CLI, Aider, or your
+own wrapper under `agents` in the global config:
+
+```json
+{
+  "agents": [
+    {
+      "id": "qwen",
+      "label": "Qwen Code",
+      "command": "qwen",
+      "resume": "qwen --continue"
+    },
+    {
+      "id": "kimi",
+      "label": "Kimi CLI",
+      "command": "kimi"
+    }
+  ]
+}
+```
+
+Use the actual start/resume syntax for the CLI installed on your machine. A
+custom `resume` command is optional; because arbitrary CLIs do not share a
+session format, `r` invokes it explicitly while smart `↵` starts fresh. These
+commands are loaded only from `~/.config/izakaya/config.json`, never from a
+repo, so selecting unfamiliar code cannot smuggle in a launcher. `c` and `C`
+remain direct Claude shortcuts for existing muscle memory.
+
 ### The launch keys, across platforms
 
-Browsing the menu works anywhere Node does. The launch keys (`o` `t` `e` `c`
+Browsing the menu works anywhere Node does. The launch keys (`o` `t` `e` `a`
 `b` `y`) reach out to the OS, so how far they go depends on where you sit:
 
 - **`o` open · `b` browser · `y` copy** — full parity on **macOS and Linux**.
@@ -201,7 +247,7 @@ Browsing the menu works anywhere Node does. The launch keys (`o` `t` `e` `c`
   `wl-copy` (Wayland), `xclip`, or `xsel` — whichever you have installed. With
   none of them around, `y` asks the terminal itself via **OSC 52** — zero
   processes, and it works over a bare SSH session too.
-- **`t` terminal · `e` editor · `c` claude** — spawn a new terminal window.
+- **`t` terminal · `e` editor · `a` agents** — spawn a new terminal window.
   - **inside tmux** (any platform), a new window means a **tmux window** at
     the repo — the bar meets you where you live, not over it.
   - **macOS** drives Ghostty over AppleScript, falling back to Terminal.app.
@@ -233,20 +279,21 @@ Select a repo and the right panel fills in:
   shaped like the Starship prompt it sits under
 - **the open tab** — the uncommitted changes, file by file and colored by
   status (modified, added, deleted, renamed, untracked), staged marked. Press
-  `→` to step behind the bar and walk the tab with `↑`/`↓`; the file you're on
+  `Tab` to step behind the bar and walk the tab with `↑`/`↓`; the file you're on
   glows orange, and `↵` peeks the pour — its diff, right there, read-only
 - **the last pour** and the few before it: recent commits with ages
 - **the kitchen** — a 12-week sparkline of commit activity, the chefs who
   cook here, and the shelf: branches, tags, stashes
 - **the pantry** — a language bar with percentages, file count, and size on
   disk
-- **the hand behind the bar** — how much of the recent work Claude
-  co-authored and with which models, plus whether a Claude Code session is
-  open at this repo and when it last spoke (`C` picks it back up)
+- **the hand behind the bar** — factual commit attribution: how much recent
+  work carries Claude co-author trailers and which models are named
+- **agents at the bar** — local Claude Code and Codex sessions associated with
+  this exact path, and when each last spoke (`a` starts or resumes one)
 - **word from the street** — with `gh` installed, the plate you examine
   shows its open PRs and latest checks
 - stack chips (frameworks and tooling it spotted), the remote, whether
-  `CLAUDE.md` is posted, and the README's opening line in quotes
+  `AGENTS.md` or `CLAUDE.md` is posted, and the README's opening line in quotes
 
 Repos without git are still served, marked as off-menu items.
 
@@ -301,7 +348,7 @@ export IZAKAYA_USUAL="dev-session"        # env var, or…
 ```
 
 Then `u` on any plate fires it at that repo: launched through the same
-platform layer as `t`/`e`/`c` (a **tmux window** when you're inside tmux, a
+platform layer as `t`/`e`/`a` (a **tmux window** when you're inside tmux, a
 terminal window otherwise), via `$SHELL -lc` so your login environment is
 there, with the working directory at the repo and the repo's absolute path
 as `$1`. Extra flags ride along fine: `"usual": "dev-session --layout full"`.
@@ -353,11 +400,11 @@ izakaya --closing-time --json    # the same sweep, structured
 ```
 
 `--report` prints every plate the bar would serve — git status, the open
-tab, ahead/behind, unpushed pours, stashes, languages, stack chips, the
-Claude session age and AI-assisted share. The `schema` field mirrors the
+tab, ahead/behind, unpushed pours, stashes, languages, stack chips, known
+agent sessions and factual AI co-author attribution. The `schema` field mirrors the
 menu-cache version and bumps whenever a plate changes shape, so anything
 built on it can notice instead of break. An agent gets the answer to
-"which repos need attention, and where did Claude leave off?" in one call.
+"which repos need attention, and where did an agent leave off?" in one call.
 
 `--closing-time` is the `!` scene to go: every plate carrying work only
 this machine holds. The exit code does the talking — `1` when something's
@@ -377,7 +424,7 @@ izakaya never writes to the repos it scans. The only files it touches are
 its own:
 
 - `~/.config/izakaya/config.json` — where your work lives, your `theme`,
-  your optional `usual` session script, and (on Linux) an optional
+  optional agent launchers, your optional `usual` session script, and (on Linux) an optional
   `terminal` override (`$XDG_CONFIG_HOME` respected)
 - `~/.cache/izakaya/menu.json` — the warm-start menu, keyed by root
 - `~/.cache/izakaya/sayings.json` — the kotowaza deck's cursor
@@ -385,7 +432,7 @@ its own:
 
 (the cache trio lives under `$XDG_CACHE_HOME/izakaya` when that's set)
 
-Everything else — Finder, terminal windows, the editor, Claude Code, the
+Everything else — Finder, terminal windows, the editor, coding agents, the
 browser, the clipboard — is a launch, not a mutation.
 
 ## The demo GIF
@@ -410,7 +457,7 @@ runs it on macOS and Linux plus a pty smoke render of the real thing.
 - A terminal with truecolor (Ghostty, kitty, iTerm2, …)
 - **Browsing** works on any platform Node runs on. The **launch keys** go
   furthest on macOS and Linux: `o`/`b`/`y` work on both; terminal spawning
-  (`t`/`e`/`c`) works with Ghostty/Terminal.app on macOS, and with kitty,
+  (`t`/`e`/`a`) works with Ghostty/Terminal.app on macOS, and with kitty,
   wezterm, alacritty, or foot on Linux — or any terminal you point
   `IZAKAYA_TERMINAL` / the `terminal` config field at. See
   [the launch keys, across platforms](#the-launch-keys-across-platforms).
