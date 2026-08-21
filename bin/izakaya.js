@@ -1451,8 +1451,17 @@ function listRow(repo, selected, W) {
       : stale
         ? fg(T.fgFaint) + G.moon
         : fg(T.green) + G.ok;
-  // unpushed work is the most actionable fact on the menu — surface it
-  const aheadMark = repo.isGit && repo.ahead > 0 ? fg(T.cyan) + G.ahead : "";
+  // unpushed work is the most actionable fact on the menu — surface it.
+  // Cyan: the branch you're on is ahead of its upstream, right now. Orange:
+  // you're clean here, but some other local branch still has commits no
+  // remote has — the same fact --closing-time warns about.
+  const aheadMark = !repo.isGit
+    ? ""
+    : repo.ahead > 0
+      ? fg(T.cyan) + G.ahead
+      : repo.unpushed > 0
+        ? fg(T.orange) + G.ahead
+        : "";
   // new pours since your last visit — reads away on the next rescan
   const freshMark = repo.fresh ? fg(T.teal) + "+" : "";
   const age = fg(T.fgDim) + relTime(repo.lastUnix);
