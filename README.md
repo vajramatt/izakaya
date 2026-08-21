@@ -97,22 +97,49 @@ in behind it.
 
 ### Nested projects
 
-Repos often live together inside a parent folder, so the menu can be opened
-like a tree. Highlight a parent and press `→`: its immediate subfolders appear
-as indented rows directly underneath, and the first child is selected. The
-dashboard on the right immediately switches to that subfolder.
+Repos often live together inside a parent folder, so the left-hand menu is also
+a navigable directory tree. There is no separate selection mode: the row with
+the blue highlight is the current repo or folder, and the dashboard on the
+right always describes that exact path.
+
+Highlight a parent and press `→`. Izakaya lazily scans its immediate subfolders,
+places them as indented rows directly underneath the parent, and moves the
+highlight onto the first child. Its dashboard appears immediately—language
+mix, files, size, README description, Git state when it is its own repo, and
+the rest of the usual plate details.
 
 ```text
 ⌄ lantern-labs
-  └ › lantern-api      ← selected; its dashboard is on the right
+  └ › lantern-api      ← highlighted; this dashboard is on the right
   └ › lantern-web
 ```
 
-Use `↑` / `↓` to move between the children. Every launcher acts on the
-highlighted folder, so `t`, `e`, `c`, `o`, `y`, and `↵` all use its exact path.
-Press `→` on a child to go another level deeper, or `←` to return to its parent.
-Generated and internal folders such as `.git`, `node_modules`, `dist`, and
-`build` stay hidden.
+The tree marks a closed or not-yet-checked folder with `›` and an expanded
+parent with `⌄`. Use `↑` / `↓` (or `j` / `k`) to move among the parent, its
+children, and the rest of the menu. Changing rows changes the dashboard; it
+does not change directories or launch anything by itself.
+
+Navigation works recursively:
+
+1. `→` on a folder discovers and opens its children.
+2. `→` on one of those children opens the next level.
+3. If a folder has no visible children, `→` steps behind the bar into its
+   changed-file view instead.
+4. `←` from a child returns the highlight to its parent.
+5. `←` on an expanded parent collapses its descendants.
+6. `←` from the changed-file view returns to the tree.
+
+Every action uses the highlighted row's exact path. `t` opens a terminal there;
+`e` opens the editor there; `c` starts Claude Code there; `o` opens it in the
+file manager; and `y` copies its path. `↵` leaves the seat file for the `iz()`
+shell wrapper so your current shell can `cd` there. The other repo-aware keys,
+including `u`, `C`, and `b`, target the highlighted child in the same way.
+
+The scan is lazy, so nested trees do not slow the initial menu. Dot-directories
+and generated or vendor folders such as `.git`, `node_modules`, `dist`,
+`build`, `target`, and `vendor` stay hidden. Ordinary source folders remain
+available: the tree mirrors useful filesystem navigation rather than guessing
+which directories count as projects.
 
 ## Keys
 
