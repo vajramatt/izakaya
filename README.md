@@ -124,10 +124,15 @@ Navigation works recursively:
 1. `→` on a folder discovers and opens its children.
 2. `→` on one of those children opens the next level.
 3. If a folder has no visible children, `→` steps behind the bar into its
-   changed-file view instead.
+   changed-file view instead. Press `Tab` anywhere in the tree to open that
+   view directly, without navigating its folders first.
 4. `←` from a child returns the highlight to its parent.
 5. `←` on an expanded parent collapses its descendants.
-6. `←` from the changed-file view returns to the tree.
+6. `Tab` or `←` from the changed-file view returns to the tree.
+
+If you found the parent with `/`, opening it clears the filter but keeps that
+same parent selected. Its children can then appear even when their names do not
+match the original query.
 
 Every action uses the highlighted row's exact path. `t` opens a terminal there;
 `e` opens the editor there; `c` starts Claude Code there; `o` opens it in the
@@ -146,7 +151,8 @@ which directories count as projects.
 | key | what |
 | --- | --- |
 | `j` / `k` / arrows | browse the menu |
-| `→` / `←` | expand subfolders / back out; press `→` again to walk into the open tab |
+| `→` / `←` | expand subfolders / back out |
+| `Tab` | open the selected repo or folder's changed-file tab; press again to return |
 | `↑` / `↓` | behind the bar: move file-by-file down the open tab |
 | `↵` (behind the bar) | peek the pour — the file's diff, read-only; esc sets it down |
 | `g` / `G` | first / last plate |

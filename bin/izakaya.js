@@ -1402,7 +1402,7 @@ function footerLine(W) {
     ? [
         ["↑/↓", "pick a file"],
         ["↵", "peek the pour"],
-        ["←", "back to menu"],
+        ["tab/←", "back to menu"],
         ["e", "edit file"],
         ["y", "copy path"],
         ["?", "more"],
@@ -1410,7 +1410,8 @@ function footerLine(W) {
       ]
     : [
         ["j/k", "browse"],
-        ["→", "open / examine"],
+        ["→", "open folders"],
+        ["tab", "open tab"],
         ["/", "filter"],
         ["↵", "sit"],
         ["o", "open"],
@@ -1979,7 +1980,8 @@ function helpFrame(W, H) {
 
   const rows = [
     ["j / k", "browse the menu (arrows work too)"],
-    ["→ / ←", "open subfolders / back out; then examine the open tab"],
+    ["→ / ←", "open subfolders / back out"],
+    ["tab", "step behind the bar into the selected repo's open tab"],
     ["↑ / ↓", "behind the bar: walk the open tab, file by file"],
     ["enter", "behind the bar: peek the pour — the file's diff"],
     ["g / G", "first / last plate"],
@@ -2307,6 +2309,14 @@ function findRepo(dir, repos = state.repos) {
 }
 
 async function expandRepo(repo) {
+  // A filter is a way to find the doorway, not a wall around its children.
+  // Clear it before opening the tree, then keep the same absolute path selected.
+  if (state.filter) {
+    state.filter = "";
+    state.filtering = false;
+    const i = visible().findIndex((r) => r.dir === repo.dir);
+    if (i >= 0) state.sel = i;
+  }
   if (repo.children === null) {
     flash(`${G.sake} checking ${repo.name}'s side rooms…`);
     const dirs = await folderChildren(repo);
@@ -2593,6 +2603,18 @@ function onKey(buf) {
     state.filter = "";
     state.sel = 0;
     state.focus = "menu";
+    return render();
+  }
+  if (k === "\t") {
+    const repo = visible()[state.sel];
+    if (state.focus === "board") {
+      state.focus = "menu";
+    } else if (repo) {
+      state.focus = "board";
+      state.boardSel = 0;
+      state.detailScroll = 0;
+      void fetchGh(repo);
+    }
     return render();
   }
   if (k === "\x1b[C" || k === "l") {

@@ -34,11 +34,14 @@ Screenshot docs/screens/menu.png
 Sleep 800ms
 
 # open a studio folder — its related projects unfold directly beneath it,
-# the first child takes focus, and every launch key follows that exact path
-Type "G"
-Sleep 500ms
-Up
+# the active filter clears at the doorway, the first child takes focus, and
+# every launch key follows that exact path
+Type "/"
+Sleep 350ms
+Type@180ms "ll"
 Sleep 800ms
+Enter
+Sleep 400ms
 Right
 Sleep 2.2s
 Down
@@ -60,13 +63,9 @@ Sleep 1.2s
 Enter
 Sleep 800ms
 
-# open the repo's source folder, return to the parent, then step behind the
-# bar and walk its open tab — tree navigation and file navigation stay distinct
-Right
-Sleep 1.2s
-Left
-Sleep 500ms
-Right
+# tab goes straight behind the bar — folder navigation and the open tab have
+# distinct controls even when a repo contains src, packages, or apps
+Tab
 Sleep 900ms
 Down
 Sleep 600ms
