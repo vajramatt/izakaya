@@ -95,12 +95,31 @@ Scanning pours twice: a quick pass gets the whole menu up fast, then the
 deep history — the activity sparkline, the chefs, the AI tally — simmers
 in behind it.
 
+### Nested projects
+
+Repos often live together inside a parent folder, so the menu can be opened
+like a tree. Highlight a parent and press `→`: its immediate subfolders appear
+as indented rows directly underneath, and the first child is selected. The
+dashboard on the right immediately switches to that subfolder.
+
+```text
+⌄ lantern-labs
+  └ › lantern-api      ← selected; its dashboard is on the right
+  └ › lantern-web
+```
+
+Use `↑` / `↓` to move between the children. Every launcher acts on the
+highlighted folder, so `t`, `e`, `c`, `o`, `y`, and `↵` all use its exact path.
+Press `→` on a child to go another level deeper, or `←` to return to its parent.
+Generated and internal folders such as `.git`, `node_modules`, `dist`, and
+`build` stay hidden.
+
 ## Keys
 
 | key | what |
 | --- | --- |
 | `j` / `k` / arrows | browse the menu |
-| `→` / `←` | step behind the bar / back out front — `→` walks into the open tab |
+| `→` / `←` | expand subfolders / back out; press `→` again to walk into the open tab |
 | `↑` / `↓` | behind the bar: move file-by-file down the open tab |
 | `↵` (behind the bar) | peek the pour — the file's diff, read-only; esc sets it down |
 | `g` / `G` | first / last plate |
@@ -112,7 +131,7 @@ in behind it.
 | `T` | change the lanterns — cycle the theme: tokyonight → iceberg → nord → catppuccin-mocha (remembered) |
 | `↵` | sit down — leave, and the `iz()` wrapper cd's you into the repo |
 | `o` | open the repo in the file manager — behind the bar, reveal the file |
-| `t` | new terminal window at the repo |
+| `t` | new terminal window at the selected repo or subfolder |
 | `u` | the usual — your own session script, launched at the repo ([see below](#the-usual--bring-your-own-session)) |
 | `e` | open the repo in `$EDITOR` (vim by default) in a new terminal window — behind the bar, open the file |
 | `c` | start a Claude Code session at the repo in a new terminal window |

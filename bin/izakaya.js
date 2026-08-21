@@ -545,7 +545,7 @@ const SEAT_FILE = path.join(CACHE_DIR, "seat");
 // missing `recent`, say — would crash the first paint before the rescan could
 // heal it, so a mismatched cache is simply thrown out and rebuilt. Bump this
 // whenever a field is added to (or changed on) the repo object.
-const MENU_V = 5;
+const MENU_V = 7;
 
 function loadMenu() {
   if (DEMO) return null;
@@ -632,11 +632,14 @@ const ENRICH_KEYS = [
   "unpushed", "ai", "cooked",
 ];
 
-async function scanRepo(dirent) {
-  const dir = path.join(ROOT, dirent.name);
+async function scanRepo(dirent, base = ROOT, depth = 0) {
+  const dir = path.join(base, dirent.name);
   const repo = {
     name: dirent.name,
     dir,
+    depth,
+    children: null, // immediate subfolders, poured lazily when expanded
+    expanded: false,
     isGit: false,
     branch: null,
     dirty: 0,
@@ -772,6 +775,21 @@ async function scanRepo(dirent) {
   }
 
   return repo;
+}
+
+// The nested menu mirrors the filesystem: every ordinary immediate subfolder
+// is a destination. Generated/vendor folders stay off the menu via SKIP_DIRS,
+// and dot-directories remain hidden just as they are at the top-level bar.
+async function folderChildren(repo) {
+  let entries;
+  try {
+    entries = await fs.readdir(repo.dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries.filter(
+    (e) => e.isDirectory() && !e.name.startsWith(".") && !SKIP_DIRS.has(e.name)
+  );
 }
 
 // The second pour — the plate's history. Nine more git asks that no menu
@@ -924,8 +942,17 @@ function fuzzyScore(query, name) {
   return qi === q.length ? score - n.length * 0.01 : -1;
 }
 
+function treeRepos(repos = state.repos) {
+  const flat = [];
+  for (const repo of repos) {
+    flat.push(repo);
+    if (repo.expanded && repo.children?.length) flat.push(...treeRepos(repo.children));
+  }
+  return flat;
+}
+
 const visible = () => {
-  let rs = state.repos;
+  let rs = treeRepos();
   if (state.dirtyOnly) rs = rs.filter((r) => r.dirty > 0);
   if (state.filter)
     rs = rs
@@ -986,10 +1013,14 @@ const SORTS = {
 };
 
 function applySort() {
-  const cur = visible()[state.sel]?.name;
-  state.repos.sort(SORTS[state.sort]);
+  const cur = visible()[state.sel]?.dir;
+  const sortTree = (repos) => {
+    repos.sort(SORTS[state.sort]);
+    for (const repo of repos) if (repo.children) sortTree(repo.children);
+  };
+  sortTree(state.repos);
   if (cur) {
-    const i = visible().findIndex((r) => r.name === cur);
+    const i = visible().findIndex((r) => r.dir === cur);
     if (i >= 0) state.sel = i;
   }
   clampSel();
@@ -1075,10 +1106,12 @@ async function scanAll() {
       const d = queue.shift();
       const repo = await scanRepo(d);
       if (gen !== scanGen) return;
-      const i = state.repos.findIndex((r) => r.name === repo.name);
+      const i = state.repos.findIndex((r) => r.dir === repo.dir);
       if (i >= 0) {
         for (const key of ENRICH_KEYS) repo[key] = state.repos[i][key];
         if (state.repos[i].gh !== undefined) repo.gh = state.repos[i].gh;
+        repo.children = state.repos[i].children;
+        repo.expanded = state.repos[i].expanded;
         state.repos[i] = repo;
       } else state.repos.push(repo);
       state.scanned++;
@@ -1107,7 +1140,7 @@ async function scanAll() {
       const r = pot.shift();
       const more = await enrichRepo(r);
       if (gen !== scanGen) return;
-      const live = state.repos.find((x) => x.name === r.name);
+      const live = state.repos.find((x) => x.dir === r.dir);
       if (live) Object.assign(live, more);
       render();
     }
@@ -1377,7 +1410,7 @@ function footerLine(W) {
       ]
     : [
         ["j/k", "browse"],
-        ["→", "examine"],
+        ["→", "open / examine"],
         ["/", "filter"],
         ["↵", "sit"],
         ["o", "open"],
@@ -1423,9 +1456,18 @@ function listRow(repo, selected, W) {
   // new pours since your last visit — reads away on the next rescan
   const freshMark = repo.fresh ? fg(T.teal) + "+" : "";
   const age = fg(T.fgDim) + relTime(repo.lastUnix);
-  const right = `${freshMark}${dirtyMark}${aheadMark} ${age}`;
+  // Nested rows spend their width on the folder name and hierarchy. Their
+  // full status is already on the dashboard as soon as the row is selected.
+  const right = repo.depth ? `${dirtyMark}` : `${freshMark}${dirtyMark}${aheadMark} ${age}`;
   const rightW = visW(right);
-  let left = `${accent}${base} ${icon} ${nameC}${base}${repo.name}${RESET}${base}`;
+  const indent = "  ".repeat(repo.depth || 0);
+  const branch = repo.depth ? `${fg(T.fgFaint)}└ ` : "";
+  const disclosure = repo.children === null
+    ? `${fg(T.fgFaint)}› `
+    : repo.children.length
+      ? `${fg(T.blue)}${repo.expanded ? "⌄" : "›"} `
+      : "  ";
+  let left = `${accent}${base} ${indent}${branch}${disclosure}${icon} ${nameC}${base}${repo.name}${RESET}${base}`;
   left = truncW(left, W - rightW - 2) + base;
   const gap = W - visW(left) - rightW - 1;
   return base + left + " ".repeat(Math.max(1, gap)) + right + " " + RESET;
@@ -1928,7 +1970,7 @@ function helpFrame(W, H) {
 
   const rows = [
     ["j / k", "browse the menu (arrows work too)"],
-    ["→ / ←", "step behind the bar / back out front"],
+    ["→ / ←", "open subfolders / back out; then examine the open tab"],
     ["↑ / ↓", "behind the bar: walk the open tab, file by file"],
     ["enter", "behind the bar: peek the pour — the file's diff"],
     ["g / G", "first / last plate"],
@@ -2246,6 +2288,67 @@ function move(d) {
   render();
 }
 
+function findRepo(dir, repos = state.repos) {
+  for (const repo of repos) {
+    if (repo.dir === dir) return repo;
+    const child = repo.children && findRepo(dir, repo.children);
+    if (child) return child;
+  }
+  return null;
+}
+
+async function expandRepo(repo) {
+  if (repo.children === null) {
+    flash(`${G.sake} checking ${repo.name}'s side rooms…`);
+    const dirs = await folderChildren(repo);
+    const children = await Promise.all(
+      dirs.map((d) => scanRepo(d, repo.dir, (repo.depth || 0) + 1))
+    );
+    const histories = await Promise.all(children.map((child) => enrichRepo(child)));
+    for (let i = 0; i < children.length; i++) Object.assign(children[i], histories[i]);
+    // A root rescan may have replaced the plate while its side rooms poured.
+    // Land on the live object so the result is not lost.
+    repo = findRepo(repo.dir) || repo;
+    repo.children = children;
+    applySort();
+  }
+  if (!repo.children.length) {
+    state.focus = "board";
+    state.boardSel = 0;
+    state.detailScroll = 0;
+    void fetchGh(repo);
+    return render();
+  }
+  repo.expanded = true;
+  // Right means “go in”: land on the first child immediately so its dashboard
+  // replaces the parent's, while the indented siblings remain visible below.
+  const first = visible().findIndex((r) => r === repo.children[0]);
+  if (first >= 0) state.sel = first;
+  state.detailScroll = 0;
+  render();
+}
+
+function backOutTree() {
+  const repo = visible()[state.sel];
+  if (!repo) return false;
+  if (repo.expanded) {
+    repo.expanded = false;
+    clampSel();
+    render();
+    return true;
+  }
+  if (repo.depth > 0) {
+    const parentDir = path.dirname(repo.dir);
+    const parent = findRepo(parentDir);
+    const i = visible().findIndex((r) => r === parent);
+    if (i >= 0) state.sel = i;
+    state.detailScroll = 0;
+    render();
+    return true;
+  }
+  return false;
+}
+
 // Behind the bar, up/down read down the board; the upper bound is clamped
 // against the pane height in render().
 function scrollBoard(d) {
@@ -2280,7 +2383,7 @@ async function fetchGh(repo) {
   if (!repo.remote || !repo.remote.startsWith("github.com/")) return;
   // answers land by name — a rescan can swap the plate object out from under
   // this ask, and writing to the stale one would lose the street's reply
-  const live = () => state.repos.find((r) => r.name === repo.name) || repo;
+  const live = () => findRepo(repo.dir) || repo;
   live().gh = null; // the ask is out
   render();
   let gh;
@@ -2484,13 +2587,16 @@ function onKey(buf) {
     return render();
   }
   if (k === "\x1b[C" || k === "l") {
-    // → step behind the bar, onto the first file on the open tab
+    // → opens a plate's subfolders first; once open, step behind the bar
     if (state.focus === "menu" && visible()[state.sel]) {
-      state.focus = "board";
-      state.boardSel = 0;
-      state.detailScroll = 0;
-      void fetchGh(visible()[state.sel]); // examining a plate asks the street
-      render();
+      const repo = visible()[state.sel];
+      if (repo.expanded) {
+        state.focus = "board";
+        state.boardSel = 0;
+        state.detailScroll = 0;
+        void fetchGh(repo); // examining a plate asks the street
+        render();
+      } else void expandRepo(repo);
     }
     return;
   }
@@ -2500,6 +2606,7 @@ function onKey(buf) {
       state.focus = "menu";
       return render();
     }
+    if (backOutTree()) return;
     return;
   }
   if (k === "j" || k === "\x1b[B")

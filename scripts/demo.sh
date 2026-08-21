@@ -172,4 +172,26 @@ echo '# tofu notes' > "$DEMO/tofu-notes/README.md"
 echo 'Soft plans, firm opinions.' >> "$DEMO/tofu-notes/README.md"
 lorem "$DEMO/tofu-notes/ideas.md" 4000
 
+# ── lantern-labs — a studio folder with related projects nested inside ───────
+# Select lantern-labs and press →; the two child plates appear beneath it.
+mk lantern-labs/lantern-web
+cat > "$R/package.json" <<'EOF'
+{ "name": "lantern-web", "version": "1.4.0",
+  "dependencies": { "astro": "^5.0.0" } }
+EOF
+echo '# lantern-web' > "$R/README.md"
+echo 'The public glow for Lantern Labs.' >> "$R/README.md"
+mkdir -p "$R/src"
+lorem "$R/src/index.ts" 5000
+pad_commits "$R" "Mina Park" 5 18
+ci "$R" "Mina Park" 12 "feat: light the new landing page"
+
+mk lantern-labs/lantern-api
+echo 'module lantern-api' > "$R/go.mod"
+echo '# lantern-api' > "$R/README.md"
+echo 'A small service that keeps the lanterns lit.' >> "$R/README.md"
+lorem "$R/main.go" 6500
+pad_commits "$R" "Mina Park" 4 28
+ci "$R" "Mina Park" 20 "feat: report lantern health"
+
 echo "demo bar stocked at $DEMO"
