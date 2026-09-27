@@ -17,9 +17,10 @@ import {
   charW, visW, truncW, padW,
   fuzzyScore, relTime, fmtBytes,
   changeMark, changePath, scrubRemote,
-  expandHome, shq, isPaste, printable, chopChar,
+  expandHome, shq, isPaste, printable, chopChar, scrubText,
   applyTheme, langMeta,
-  agentDefinitions, codexSessionMeta,
+  agentDefinitions, codexSessionMeta, aiTally, parseWorktrees,
+  offBranch, lastSeen, standupSince,
   THEMES, T, LANGS,
 } from "../bin/izakaya.js";
 
@@ -102,6 +103,17 @@ test("fmtBytes: units and precision", () => {
 });
 
 // ── git chrome scrubbing ─────────────────────────────────────────────────────
+
+test("scrubText: a repo's words never talk to the terminal", () => {
+  // OSC 52 clipboard write, OSC 0 retitle, SGR blink, a C1 CSI — all off
+  assert.equal(scrubText("feat: \x1b]52;c;cm0gLXJm\x07 innocent"), "feat: ]52;c;cm0gLXJm innocent");
+  assert.equal(scrubText("Mallory\x1b[5m"), "Mallory[5m");
+  assert.equal(scrubText("a\x9b31mb"), "a31mb");
+  assert.equal(scrubText("tab\there"), "tab here");
+  // the bar's own tongue passes untouched
+  assert.equal(scrubText("居酒屋 — ramen 🏮 café"), "居酒屋 — ramen 🏮 café");
+  assert.equal(scrubText(null), null);
+});
 
 test("scrubRemote: strips scheme, .git, and — above all — credentials", () => {
   assert.equal(
@@ -225,4 +237,67 @@ test("codexSessionMeta: reads cwd from session metadata without needing the whol
     { cwd: "/code/ramen bar" }
   );
   assert.equal(codexSessionMeta('{"type":"response_item"}'), null);
+});
+
+// ── the second pour's readers ────────────────────────────────────────────────
+
+test("aiTally: every signing hand counts, Claude keeps its model", () => {
+  const rec = (body) => `abc\x1f${body}\x1e`;
+  const log = [
+    rec("feat: a\n\nCo-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"),
+    rec("feat: b\n\nCo-authored-by: Cursor Agent <cursoragent@cursor.com>"),
+    rec("feat: c\n\nCo-authored-by: aider (gpt-5) <noreply@aider.chat>\nCo-authored-by: aider (gpt-5) <noreply@aider.chat>"),
+    rec("feat: d — no trailer, no mark"),
+    rec("feat: e\n\nCo-authored-by: Jane Human <jane@example.com>"),
+  ].join("\n");
+  const t = aiTally(log);
+  assert.equal(t.total, 5);
+  assert.equal(t.assisted, 3);
+  assert.deepEqual(
+    t.models.map((m) => [m.label, m.agent, m.count]).sort(),
+    [["Aider", "Aider", 1], ["Cursor", "Cursor", 1], ["Opus 4.7", "Claude", 1]]
+  );
+  assert.equal(aiTally(rec("plain")), null);
+  assert.equal(aiTally(null), null);
+});
+
+test("parseWorktrees: linked worktrees only, branch or detached", () => {
+  const text = [
+    "worktree /code/izakaya", "HEAD aaa", "branch refs/heads/main", "",
+    "worktree /code/izakaya-wt/scrub", "HEAD bbb", "branch refs/heads/fix/scrub", "",
+    "worktree /code/izakaya-wt/spike", "HEAD ccc", "detached",
+  ].join("\n");
+  assert.deepEqual(parseWorktrees(text), [
+    { path: "/code/izakaya-wt/scrub", branch: "fix/scrub" },
+    { path: "/code/izakaya-wt/spike", branch: "detached" },
+  ]);
+  assert.deepEqual(parseWorktrees(""), []);
+  assert.deepEqual(parseWorktrees(null), []);
+});
+
+test("offBranch: names the branch only when it's off the main line", () => {
+  assert.equal(offBranch({ isGit: true, branch: "main" }), null);
+  assert.equal(offBranch({ isGit: true, branch: "master" }), null);
+  assert.equal(offBranch({ isGit: true, branch: "feat/x" }), "feat/x");
+  assert.equal(offBranch({ isGit: true, branch: "HEAD" }), "detached");
+  // origin's HEAD wins over the guess
+  assert.equal(offBranch({ isGit: true, branch: "develop", defaultBranch: "develop" }), null);
+  assert.equal(offBranch({ isGit: true, branch: "main", defaultBranch: "develop" }), "main");
+  assert.equal(offBranch({ isGit: false, branch: null }), null);
+});
+
+test("lastSeen: an uncommitted edit outranks an older pour", () => {
+  assert.equal(lastSeen({ lastUnix: 100, touchedUnix: 50 }), 100);
+  assert.equal(lastSeen({ lastUnix: 100, touchedUnix: 500 }), 500);
+  assert.equal(lastSeen({ lastUnix: 0 }), 0);
+});
+
+test("standupSince: yesterday, except Monday and weekends look back to Friday", () => {
+  const at = (iso) => standupSince(new Date(iso));
+  const day = (d) => [d.getDay(), d.getHours(), d.getMinutes()];
+  assert.deepEqual(day(at("2026-09-23T10:00:00")), [2, 0, 0]); // Wed → Tue 00:00
+  assert.deepEqual(day(at("2026-09-28T09:00:00")), [5, 0, 0]); // Mon → Fri
+  assert.deepEqual(day(at("2026-09-27T09:00:00")), [5, 0, 0]); // Sun → Fri
+  assert.deepEqual(day(at("2026-09-26T09:00:00")), [5, 0, 0]); // Sat → Fri
+  assert.equal(at("2026-09-28T09:00:00").getDate(), 25);
 });

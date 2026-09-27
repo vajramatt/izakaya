@@ -20,7 +20,7 @@ const execFile = promisify(execFileCb);
 // nothing when installed — in which case the line is just the bare version.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const VERSION = "0.8.0";
+const VERSION = "0.9.0";
 
 function commit() {
   try {
@@ -88,7 +88,7 @@ const THEMES = {
       blue: "#7aa2f7", cyan: "#7dcfff", teal: "#73daca", green: "#9ece6a",
       yellow: "#e0af68", orange: "#ff9e64", red: "#f7768e", magenta: "#bb9af7",
       seg0: "#a3aed2", seg1: "#769ff0", seg2: "#394260", seg3: "#212736",
-      seg4: "#1d2230", segFg: "#e3e5e5", segDim: "#a0a9cb",
+      seg4: "#1d2230", segFg: "#e3e5e5", segDim: "#a0a9cb", segInk: "#090c0c",
     },
     stops: [
       [122, 162, 247], [125, 207, 255], [187, 154, 247],
@@ -103,7 +103,7 @@ const THEMES = {
       blue: "#84a0c6", cyan: "#89b8c2", teal: "#95c4ce", green: "#b4be82",
       yellow: "#e9b189", orange: "#e2a478", red: "#e27878", magenta: "#a093c7",
       seg0: "#b4b9ca", seg1: "#84a0c6", seg2: "#2e3244", seg3: "#22263a",
-      seg4: "#1b1e2e", segFg: "#d2d4de", segDim: "#9a9ebc",
+      seg4: "#1b1e2e", segFg: "#d2d4de", segDim: "#9a9ebc", segInk: "#0f1117",
     },
     stops: [
       [132, 160, 198], [137, 184, 194], [160, 147, 199],
@@ -118,7 +118,7 @@ const THEMES = {
       blue: "#81a1c1", cyan: "#88c0d0", teal: "#8fbcbb", green: "#a3be8c",
       yellow: "#ebcb8b", orange: "#d08770", red: "#bf616a", magenta: "#b48ead",
       seg0: "#b8c5dd", seg1: "#81a1c1", seg2: "#434c5e", seg3: "#3b4252",
-      seg4: "#333a47", segFg: "#eceff4", segDim: "#aab4c8",
+      seg4: "#333a47", segFg: "#eceff4", segDim: "#aab4c8", segInk: "#1f232b",
     },
     stops: [
       [136, 192, 208], [129, 161, 193], [180, 142, 173],
@@ -133,7 +133,7 @@ const THEMES = {
       blue: "#89b4fa", cyan: "#89dceb", teal: "#94e2d5", green: "#a6e3a1",
       yellow: "#f9e2af", orange: "#fab387", red: "#f38ba8", magenta: "#cba6f7",
       seg0: "#b4befe", seg1: "#89b4fa", seg2: "#45475a", seg3: "#313244",
-      seg4: "#292c3d", segFg: "#cdd6f4", segDim: "#a6adc8",
+      seg4: "#292c3d", segFg: "#cdd6f4", segDim: "#a6adc8", segInk: "#11111b",
     },
     stops: [
       [137, 180, 250], [137, 220, 235], [203, 166, 247],
@@ -498,6 +498,12 @@ function agentDefinitions(config = loadConfig()) {
   return agents;
 }
 
+// The bar's own roster, read once — render asks for it every frame, and a
+// config read per frame is a disk hit per frame. A rescan (r) re-reads it,
+// so a newly added agent is a keypress away.
+let agentRoster = null;
+const agentsOnFile = () => (agentRoster ??= agentDefinitions());
+
 function codexSessionMeta(text) {
   const cwdMatch = text.match(/"cwd"\s*:\s*("(?:\\.|[^"\\])*")/);
   if (!cwdMatch) return null;
@@ -509,6 +515,7 @@ function codexSessionMeta(text) {
 }
 
 let codexSessionsPromise;
+const codexCwdByFile = new Map(); // session file → its cwd, read once ever
 async function codexSessionIndex() {
   if (codexSessionsPromise) return codexSessionsPromise;
   codexSessionsPromise = (async () => {
@@ -522,14 +529,19 @@ async function codexSessionIndex() {
         if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
         let handle;
         try {
-          handle = await fs.open(file, "r");
-          const buf = Buffer.alloc(32768);
-          const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
-          const meta = codexSessionMeta(buf.toString("utf8", 0, bytesRead));
-          if (!meta?.cwd) continue;
-          const st = await handle.stat();
-          const unix = Math.floor(st.mtimeMs / 1000);
-          found.set(path.resolve(meta.cwd), Math.max(found.get(path.resolve(meta.cwd)) || 0, unix));
+          const st = await fs.stat(file);
+          let cwd = codexCwdByFile.get(file);
+          if (cwd === undefined) {
+            handle = await fs.open(file, "r");
+            const buf = Buffer.alloc(32768);
+            const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+            cwd = codexSessionMeta(buf.toString("utf8", 0, bytesRead))?.cwd || null;
+            // a file too young to have written its meta yet gets asked again
+            if (cwd || bytesRead >= buf.length) codexCwdByFile.set(file, cwd);
+          }
+          if (!cwd) continue;
+          const key = path.resolve(cwd);
+          found.set(key, Math.max(found.get(key) || 0, Math.floor(st.mtimeMs / 1000)));
         } catch {} finally {
           try { await handle?.close(); } catch {}
         }
@@ -568,6 +580,10 @@ if (ARGV.includes("--help") || ARGV.includes("-h")) {
       `                stashes, unpushed pours, repos with no remote. Plain\n` +
       `                text (add --json for data); exits 1 when plates are at\n` +
       `                risk, 0 when the stove is clean\n` +
+      `  --standup     your own pours across every plate since the last\n` +
+      `                workday (Monday looks back to Friday) — plain text,\n` +
+      `                or --json. You are git's user.name or user.email\n` +
+      `                ($IZAKAYA_AUTHOR, a git --author pattern, overrides)\n` +
       `  -v, --version print the version and leave\n` +
       `  -h, --help    show this and leave\n\n` +
       `Once you're in, press ? for the keys. またね.\n`
@@ -582,7 +598,9 @@ const TAKEOUT = ARGV.includes("--report")
   ? "report"
   : ARGV.includes("--closing-time")
     ? "closing-time"
-    : null;
+    : ARGV.includes("--standup")
+      ? "standup"
+      : null;
 const TAKEOUT_JSON = ARGV.includes("--json");
 
 // A path-looking word (~/…, /…, ./…, or anything with a slash) is the root;
@@ -616,8 +634,9 @@ const SEAT_FILE = path.join(CACHE_DIR, "seat");
 // The cached menu carries a schema stamp. A plate shape from an older build —
 // missing `recent`, say — would crash the first paint before the rescan could
 // heal it, so a mismatched cache is simply thrown out and rebuilt. Bump this
-// whenever a field is added to (or changed on) the repo object.
-const MENU_V = 8;
+// whenever a field is added to (or changed on) the repo object. (9: plates
+// are scrubbed of control characters at scan time — older caches weren't.)
+const MENU_V = 9;
 
 function loadMenu() {
   if (DEMO) return null;
@@ -637,8 +656,11 @@ function saveMenu() {
     try { all = JSON.parse(fsSync.readFileSync(MENU_CACHE, "utf8")); } catch {}
     if (all.v !== MENU_V) all = { v: MENU_V, menus: {} };
     // session-only garnish (the teal "since your last visit" marks, gh's
-    // answers) stays out of the cache — next visit asks fresh
-    all.menus[ROOT] = state.repos.map(({ fresh, gh, ...r }) => r);
+    // answers) stays out of the cache — next visit asks fresh. So do side
+    // rooms: nothing re-pours a cached child, so they're poured on demand.
+    all.menus[ROOT] = state.repos.map(({ fresh, gh, children, expanded, ...r }) => ({
+      ...r, children: null, expanded: false,
+    }));
     fsSync.mkdirSync(path.dirname(MENU_CACHE), { recursive: true });
     fsSync.writeFileSync(MENU_CACHE, JSON.stringify(all));
   } catch {}
@@ -654,6 +676,14 @@ async function git(cwd, ...args) {
     return null;
   }
 }
+
+// Anything a scanned repo wrote — a commit subject, an author, a README
+// line, a folder name — is someone else's text. Raw, it could carry escape
+// sequences that talk to the terminal directly (retitle the window, write
+// the clipboard via OSC 52). Tabs become a space; every other C0/C1 control
+// comes off before the text is ever put on a plate.
+const scrubText = (s) =>
+  typeof s === "string" ? s.replaceAll("\t", " ").replace(/[\x00-\x1f\x7f-\x9f]/g, "") : s;
 
 // origin's url, made fit for the menu: any embedded user:token@ credential
 // (an https PAT, say) is stripped first, then the scheme and .git chrome.
@@ -684,7 +714,11 @@ async function walkStats(dir, acc, depth = 0) {
       acc.files++;
       const ext = path.extname(e.name).slice(1).toLowerCase();
       let size = 0;
-      try { size = (await fs.stat(p)).size; } catch {}
+      try {
+        const st = await fs.stat(p);
+        size = st.size;
+        if (st.mtimeMs > acc.newest) acc.newest = st.mtimeMs;
+      } catch {}
       acc.bytes += size;
       const lang = LANGS[ext];
       if (lang) acc.langs[lang.name] = (acc.langs[lang.name] || 0) + size;
@@ -701,19 +735,41 @@ async function walkStats(dir, acc, depth = 0) {
 // they're replaced, and `cooked` marks a plate whose history is current.
 const ENRICH_KEYS = [
   "commits", "recent", "weeks", "chefs", "branches", "tags", "stash",
-  "unpushed", "ai", "cooked",
+  "unpushed", "ai", "worktrees", "cooked",
 ];
+
+// `git worktree list --porcelain` → the side kitchens: every linked worktree
+// (the main one is the plate itself, so it's left off) with its branch, or
+// "detached". Agents that work in parallel usually work in these.
+function parseWorktrees(text) {
+  if (!text) return [];
+  return text
+    .split(/\n\s*\n/)
+    .map((block) => {
+      const wt = { path: null, branch: null };
+      for (const line of block.split("\n")) {
+        if (line.startsWith("worktree ")) wt.path = line.slice(9);
+        else if (line.startsWith("branch ")) wt.branch = line.slice(7).replace(/^refs\/heads\//, "");
+        else if (line === "detached") wt.branch = "detached";
+      }
+      return wt;
+    })
+    .filter((wt) => wt.path)
+    .slice(1)
+    .map((wt) => ({ path: scrubText(wt.path), branch: scrubText(wt.branch || "detached") }));
+}
 
 async function scanRepo(dirent, base = ROOT, depth = 0) {
   const dir = path.join(base, dirent.name);
   const repo = {
-    name: dirent.name,
+    name: scrubText(dirent.name), // display only — `dir` keeps the real bytes
     dir,
     depth,
     children: null, // immediate subfolders, poured lazily when expanded
     expanded: false,
     isGit: false,
     branch: null,
+    defaultBranch: null, // origin's HEAD, when the clone knows it
     dirty: 0,
     changes: [],
     ahead: 0,
@@ -722,6 +778,7 @@ async function scanRepo(dirent, base = ROOT, depth = 0) {
     lastMsg: null,
     lastAuthor: null,
     lastUnix: 0,
+    touchedUnix: 0, // newest uncommitted edit (git) or newest file (not git)
     remote: null,
     files: 0,
     bytes: 0,
@@ -739,6 +796,7 @@ async function scanRepo(dirent, base = ROOT, depth = 0) {
     branches: 0,
     tags: 0,
     stash: 0,
+    worktrees: [], // linked worktrees — {path, branch}
     unpushed: 0, // commits on any local branch that no remote has
     cooked: false, // true once enrichRepo's history has landed
   };
@@ -749,14 +807,16 @@ async function scanRepo(dirent, base = ROOT, depth = 0) {
   } catch {}
 
   if (repo.isGit) {
-    const [branch, status, log, remote, ab] = await Promise.all([
+    const [branch, status, log, remote, ab, originHead] = await Promise.all([
       git(dir, "rev-parse", "--abbrev-ref", "HEAD"),
       git(dir, "status", "--porcelain"),
       git(dir, "log", "-1", "--format=%s%x00%an%x00%ct"),
       git(dir, "remote", "get-url", "origin"),
       git(dir, "rev-list", "--left-right", "--count", "@{u}...HEAD"),
+      git(dir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"),
     ]);
     repo.branch = branch || "—";
+    if (originHead) repo.defaultBranch = originHead.replace(/^origin\//, "");
     repo.dirty = status ? status.split("\n").filter(Boolean).length : 0;
     // keep the porcelain itself — the open tab lists what's still unsettled.
     // XY: index status, worktree status, then a space, then the path. Capped
@@ -767,13 +827,21 @@ async function scanRepo(dirent, base = ROOT, depth = 0) {
         .filter(Boolean)
         .slice(0, 200)
         .map((l) => ({ xy: l.slice(0, 2), path: l.slice(3) }));
+    // when you last had your hands on it — the newest uncommitted edit. A
+    // plate you're mid-way through shouldn't sink below last week's commit.
+    for (const ch of repo.changes) {
+      try {
+        const st = await fs.stat(path.join(dir, changePath(ch)));
+        repo.touchedUnix = Math.max(repo.touchedUnix, Math.floor(st.mtimeMs / 1000));
+      } catch {} // deleted files have no mtime to give
+    }
     if (log) {
       const [msg, author, ct] = log.split("\0");
-      repo.lastMsg = msg;
-      repo.lastAuthor = author;
+      repo.lastMsg = scrubText(msg);
+      repo.lastAuthor = scrubText(author);
       repo.lastUnix = parseInt(ct, 10) || 0;
     }
-    if (remote) repo.remote = scrubRemote(remote);
+    if (remote) repo.remote = scrubText(scrubRemote(remote));
     if (ab) {
       const [behind, ahead] = ab.split(/\s+/).map((n) => parseInt(n, 10) || 0);
       repo.behind = behind;
@@ -781,10 +849,12 @@ async function scanRepo(dirent, base = ROOT, depth = 0) {
     }
   }
 
-  const acc = { files: 0, bytes: 0, langs: {} };
+  const acc = { files: 0, bytes: 0, langs: {}, newest: 0 };
   await walkStats(dir, acc);
   repo.files = acc.files;
   repo.bytes = acc.bytes;
+  // a folder with no history still has a last-touched time: its newest file
+  if (!repo.isGit) repo.touchedUnix = Math.floor(acc.newest / 1000);
   const total = Object.values(acc.langs).reduce((a, b) => a + b, 0) || 1;
   // names + percentages only — color and icon resolve at render (langMeta),
   // so a cached plate never carries a stale theme's paint
@@ -797,7 +867,7 @@ async function scanRepo(dirent, base = ROOT, depth = 0) {
     const pkg = JSON.parse(await fs.readFile(path.join(dir, "package.json"), "utf8"));
     const deps = { ...pkg.dependencies, ...pkg.devDependencies };
     for (const chip of STACK_CHIPS) if (deps[chip.dep]) repo.chips.push(chip);
-    if (pkg.version) repo.version = pkg.version;
+    if (typeof pkg.version === "string") repo.version = scrubText(pkg.version).slice(0, 32);
   } catch {}
   for (const wf of ["wrangler.jsonc", "wrangler.json", "wrangler.toml"]) {
     try {
@@ -816,29 +886,7 @@ async function scanRepo(dirent, base = ROOT, depth = 0) {
     repo.hasAgentsMd = true;
   } catch {}
 
-  // Who's at the bar right now — a Claude Code session dir for this repo
-  // means Claude has sat here before. The path encoding mirrors Claude
-  // Code's own: every / and . in the absolute path becomes a dash. The
-  // newest session file's mtime is when it last spoke.
-  try {
-    const proj = path.join(
-      os.homedir(), ".claude", "projects", dir.replace(/[/.]/g, "-")
-    );
-    let latest = 0;
-    for (const f of await fs.readdir(proj)) {
-      if (!f.endsWith(".jsonl")) continue;
-      try {
-        const st = await fs.stat(path.join(proj, f));
-        if (st.mtimeMs > latest) latest = st.mtimeMs;
-      } catch {}
-    }
-    if (latest) repo.agents.push({ id: "claude", lastUnix: Math.floor(latest / 1000) });
-  } catch {}
-
-  try {
-    const lastUnix = (await codexSessionIndex()).get(path.resolve(dir));
-    if (lastUnix) repo.agents.push({ id: "codex", lastUnix });
-  } catch {}
+  repo.agents = await agentSessions(dir);
 
   for (const rm of ["README.md", "readme.md", "README"]) {
     try {
@@ -851,13 +899,49 @@ async function scanRepo(dirent, base = ROOT, depth = 0) {
           return t && !/^[#<!\[>|`:=~-]/.test(t);
         }) || head.find((l) => l.trim());
       repo.readmeTitle =
-        line?.replace(/^#+\s*/, "").replace(/[*_`>]/g, "").trim().slice(0, 120) || null;
+        scrubText(line)?.replace(/^#+\s*/, "").replace(/[*_`>]/g, "").trim().slice(0, 120) || null;
       break;
     } catch {}
   }
 
   return repo;
 }
+
+// Who's at the bar right now — a Claude Code session dir for this repo
+// means Claude has sat here before. The path encoding mirrors Claude
+// Code's own: every character that isn't a letter or digit becomes a dash
+// (the older / and . only form is checked too — identical for plain
+// names). The newest session file's mtime is when it last spoke. Codex
+// keeps one index for every cwd; see codexSessionIndex.
+async function agentSessions(dir) {
+  const agents = [];
+  let latest = 0;
+  const projects = path.join(os.homedir(), ".claude", "projects");
+  for (const enc of new Set([dir.replace(/[^a-zA-Z0-9]/g, "-"), dir.replace(/[/.]/g, "-")])) {
+    const proj = path.join(projects, enc);
+    try {
+      for (const f of await fs.readdir(proj)) {
+        if (!f.endsWith(".jsonl")) continue;
+        try {
+          const st = await fs.stat(path.join(proj, f));
+          if (st.mtimeMs > latest) latest = st.mtimeMs;
+        } catch {}
+      }
+    } catch {}
+  }
+  if (latest) agents.push({ id: "claude", lastUnix: Math.floor(latest / 1000) });
+  try {
+    const lastUnix = (await codexSessionIndex()).get(path.resolve(dir));
+    if (lastUnix) agents.push({ id: "codex", lastUnix });
+  } catch {}
+  return agents;
+}
+
+// An agent whose session file moved in the last couple of minutes is still
+// talking — it's cooking at this plate right now.
+const LIVE_S = 120;
+const agentLive = (repo, now = Date.now() / 1000) =>
+  !!repo.agents?.some((a) => now - a.lastUnix < LIVE_S);
 
 // The nested menu mirrors the filesystem: every ordinary immediate subfolder
 // is a destination. Generated/vendor folders stay off the menu via SKIP_DIRS,
@@ -874,6 +958,91 @@ async function folderChildren(repo) {
   );
 }
 
+// Pour a plate's side rooms — both pours for every immediate subfolder, four
+// at a time like the main kitchen, so a folder of a hundred packages can't
+// fork a thousand gits at once. A side room that was open stays open, and
+// its own rooms are re-poured too. Returns the children sorted like the menu.
+async function pourChildren(repo) {
+  const dirs = await folderChildren(repo);
+  const before = new Map((repo.children || []).map((c) => [c.dir, c]));
+  const children = new Array(dirs.length);
+  const queue = dirs.map((d, i) => [d, i]);
+  await Promise.all(
+    Array.from({ length: 4 }, async () => {
+      while (queue.length) {
+        const [d, i] = queue.shift();
+        const child = await scanRepo(d, repo.dir, (repo.depth || 0) + 1);
+        Object.assign(child, await enrichRepo(child));
+        const was = before.get(child.dir);
+        if (was?.expanded && was.children) {
+          child.children = was.children;
+          child.children = await pourChildren(child);
+          child.expanded = true;
+        }
+        children[i] = child;
+      }
+    })
+  );
+  // served in the menu's order — a re-pour that lands unsorted would slide
+  // the cursor onto a neighbor before applySort could find it again
+  return children.sort(SORTS[state.sort]);
+}
+
+// Who else was behind the bar. Coding agents sign the pours they help with
+// in a Co-authored-by trailer — Claude Code names its model
+// (`Claude Opus 4.7 <noreply@anthropic.com>`), the others their house. Only
+// the signature counts: an agent that leaves no trailer leaves no mark here.
+// Order matters — the first hand whose pattern fits the line claims it.
+const AI_HANDS = [
+  { agent: "Claude", re: /claude|anthropic/i },
+  { agent: "Codex", re: /codex|openai/i },
+  { agent: "Copilot", re: /copilot/i },
+  { agent: "Cursor", re: /cursor/i },
+  { agent: "Aider", re: /aider/i },
+  { agent: "Gemini", re: /gemini/i },
+];
+
+// Commit bodies (hash \x1f body \x1e, as enrichRepo asks git for them) → the
+// tally: how many of these pours an agent signed, and which hands/models.
+// null when no agent signed any of them.
+function aiTally(log) {
+  if (!log) return null;
+  const counts = new Map(); // label → { agent, count }
+  let total = 0, assisted = 0;
+  for (const rec of log.split("\x1e")) {
+    const cut = rec.indexOf("\x1f");
+    if (cut < 0) continue; // trailing split artifact / non-commit chaff
+    total++;
+    const seen = new Map(); // one commit can name a hand more than once
+    for (const line of rec.slice(cut + 1).split("\n")) {
+      if (!/co-?authored-by:/i.test(line)) continue;
+      const hand = AI_HANDS.find((h) => h.re.test(line));
+      if (!hand) continue;
+      let label = hand.agent;
+      if (hand.agent === "Claude") {
+        const m = line.match(/Claude\s+(Opus|Sonnet|Haiku|Fable)\s+([\d.]+)/i);
+        if (m) label = `${m[1][0].toUpperCase()}${m[1].slice(1).toLowerCase()} ${m[2]}`;
+      }
+      seen.set(label, hand.agent);
+    }
+    if (!seen.size) continue;
+    assisted++;
+    for (const [label, agent] of seen) {
+      const c = counts.get(label) || { agent, count: 0 };
+      c.count++;
+      counts.set(label, c);
+    }
+  }
+  if (!assisted) return null;
+  return {
+    models: [...counts.entries()]
+      .sort((a, b) => b[1].count - a[1].count)
+      .map(([label, { agent, count }]) => ({ label, agent, count })),
+    assisted,
+    total,
+  };
+}
+
 // The second pour — the plate's history. Nine more git asks that no menu
 // row waits on: commit count, the recent pours, twelve weeks of activity,
 // the chefs, the shelf, and who else was behind the bar. Returns just the
@@ -881,7 +1050,7 @@ async function folderChildren(repo) {
 async function enrichRepo(repo) {
   if (!repo.isGit) return { cooked: true };
   const dir = repo.dir;
-  const [count, recent, activity, authors, branches, tags, stash, unpushed, aiLog] =
+  const [count, recent, activity, authors, branches, tags, stash, unpushed, aiLog, wts] =
     await Promise.all([
       git(dir, "rev-list", "--count", "HEAD"),
       git(dir, "log", "-4", "--format=%ct%x00%s"),
@@ -893,8 +1062,9 @@ async function enrichRepo(repo) {
       // every commit on any local branch that no remote knows — not just the
       // current branch's ahead count. This is what the closing-time check reads.
       git(dir, "rev-list", "--count", "--branches", "--not", "--remotes"),
-      // commit bodies, hash-keyed, to sniff AI co-author trailers
+      // commit bodies, hash-keyed, to sniff agent co-author trailers
       git(dir, "log", "--format=%H%x1f%b%x1e", "-n", "500"),
+      git(dir, "worktree", "list", "--porcelain"),
     ]);
 
   const more = {
@@ -913,7 +1083,7 @@ async function enrichRepo(repo) {
   if (recent)
     more.recent = recent.split("\n").filter(Boolean).map((l) => {
       const [ct, msg] = l.split("\0");
-      return { ct: parseInt(ct, 10) || 0, msg: msg || "" };
+      return { ct: parseInt(ct, 10) || 0, msg: scrubText(msg || "") };
     });
   if (activity) {
     const now = Date.now() / 1000;
@@ -926,46 +1096,15 @@ async function enrichRepo(repo) {
   }
   if (authors) {
     const m = new Map();
-    for (const a of authors.split("\n")) if (a) m.set(a, (m.get(a) || 0) + 1);
+    for (const raw of authors.split("\n")) {
+      const a = scrubText(raw);
+      if (a) m.set(a, (m.get(a) || 0) + 1);
+    }
     more.chefs = [...m.entries()].sort((x, y) => y[1] - x[1]).slice(0, 3);
   }
 
-  // Who else was behind the bar — Claude Code stamps the model on every
-  // pour it helps with: `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
-  // Tally how many of the recent pours carry that mark, and which models.
-  if (aiLog) {
-    const counts = new Map();
-    let total = 0, assisted = 0;
-    for (const rec of aiLog.split("\x1e")) {
-      const cut = rec.indexOf("\x1f");
-      if (cut < 0) continue; // trailing split artifact / non-commit chaff
-      total++;
-      const body = rec.slice(cut + 1);
-      const seen = new Set(); // one commit can name a model more than once
-      for (const line of body.split("\n")) {
-        if (!/co-?authored-by:/i.test(line)) continue;
-        if (!/claude|anthropic/i.test(line)) continue;
-        const m = line.match(/Claude(?:\s+(Opus|Sonnet|Haiku|Fable)\s+([\d.]+))?/i);
-        seen.add(
-          m && m[1]
-            ? `${m[1][0].toUpperCase()}${m[1].slice(1).toLowerCase()} ${m[2]}`
-            : "Claude"
-        );
-      }
-      if (seen.size) {
-        assisted++;
-        for (const label of seen) counts.set(label, (counts.get(label) || 0) + 1);
-      }
-    }
-    if (assisted > 0)
-      more.ai = {
-        models: [...counts.entries()]
-          .sort((a, b) => b[1] - a[1])
-          .map(([label, count]) => ({ label, count })),
-        assisted,
-        total,
-      };
-  }
+  more.ai = aiTally(aiLog);
+  more.worktrees = parseWorktrees(wts);
 
   return more;
 }
@@ -1090,7 +1229,7 @@ function maybeEndSplash() {
 }
 
 const SORTS = {
-  recent: (a, b) => b.lastUnix - a.lastUnix,
+  recent: (a, b) => lastSeen(b) - lastSeen(a),
   name: (a, b) => a.name.localeCompare(b.name),
   size: (a, b) => b.bytes - a.bytes,
 };
@@ -1153,6 +1292,7 @@ let scanGen = 0;
 async function scanAll() {
   const gen = ++scanGen;
   codexSessionsPromise = undefined; // a rescan should notice newly opened sessions
+  agentRoster = null; // …and a freshly edited agent roster
   state.scanning = true;
   state.enriching = false;
   // Warm starts keep the cached menu on screen and refresh plates in place;
@@ -1175,8 +1315,8 @@ async function scanAll() {
   state.scanned = 0;
   if (warm) {
     // plates that left the menu since last visit come off the board now
-    const onMenu = new Set(dirs.map((d) => d.name));
-    state.repos = state.repos.filter((r) => onMenu.has(r.name));
+    const onMenu = new Set(dirs.map((d) => path.join(ROOT, d.name)));
+    state.repos = state.repos.filter((r) => onMenu.has(r.dir));
     applySort();
   }
   // First pour: the cheap pass, 4-wide, rendered as plates arrive. A plate
@@ -1184,6 +1324,7 @@ async function scanAll() {
   // until the second pour replaces it — a warm start must not blank the
   // kitchen it just showed.
   const queue = [...dirs];
+  const pourStart = Date.now();
   const workers = Array.from({ length: 4 }, async () => {
     while (queue.length) {
       if (gen !== scanGen) return; // stale pour — drop the tray
@@ -1200,6 +1341,10 @@ async function scanAll() {
       } else state.repos.push(repo);
       state.scanned++;
       applySort();
+      // a cold pour re-sorts under you; until you've touched a key, the
+      // cursor stays on the top of the menu rather than riding the first
+      // plate that happened to arrive down the list
+      if (!warm && lastInput < pourStart) state.sel = 0;
       // a rescan can shorten the open tab under the cursor — keep it on a file
       if (state.focus === "board")
         state.boardSel = Math.min(state.boardSel, Math.max(0, boardItems() - 1));
@@ -1231,6 +1376,16 @@ async function scanAll() {
   });
   await Promise.all(cooks);
   if (gen !== scanGen) return;
+  // Side rooms: open ones are re-poured so a rescan never serves yesterday's
+  // nested plates; closed ones are forgotten and poured fresh on the next →.
+  for (const r of state.repos) {
+    if (!r.children) continue;
+    if (!r.expanded) { r.children = null; continue; }
+    const kids = await pourChildren(r);
+    if (gen !== scanGen) return;
+    const live = findRepo(r.dir);
+    if (live) live.children = kids;
+  }
   state.enriching = false;
   applySort();
   noteVisitDelta();
@@ -1302,7 +1457,7 @@ async function scanHeadless() {
       }
     })
   );
-  plates.sort((a, b) => b.lastUnix - a.lastUnix);
+  plates.sort((a, b) => lastSeen(b) - lastSeen(a));
   return plates;
 }
 
@@ -1327,6 +1482,116 @@ function closingFacts(repos) {
       b.dirty + b.unpushed + b.stash - (a.dirty + a.unpushed + a.stash)
   );
   return at;
+}
+
+// The standup window opens on the last workday: yesterday, except that a
+// Monday (or a weekend) looks back to Friday. Midnight, local time.
+function standupSince(now = new Date()) {
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  const back = { 0: 2, 1: 3, 6: 1 }[d.getDay()] ?? 1;
+  d.setDate(d.getDate() - back);
+  return d;
+}
+
+// --standup: what you poured since the last workday, plate by plate. Only
+// `git log` is asked — no pantry walk, no second pour — so it's quick. A
+// folder that isn't a repo is looked into one level, so studio folders of
+// related projects still report.
+async function printStandup(asJson) {
+  let entries;
+  try {
+    entries = await fs.readdir(ROOT, { withFileTypes: true });
+  } catch (e) {
+    console.error(`izakaya: cannot read ${ROOT}: ${e.message}`);
+    process.exit(2);
+  }
+  const isRepo = (dir) => fsSync.existsSync(path.join(dir, ".git"));
+  const dirs = [];
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name.startsWith(".")) continue;
+    const dir = path.join(ROOT, e.name);
+    if (isRepo(dir)) { dirs.push(dir); continue; }
+    try {
+      for (const sub of await fs.readdir(dir, { withFileTypes: true }))
+        if (sub.isDirectory() && !sub.name.startsWith(".") && !SKIP_DIRS.has(sub.name) &&
+            isRepo(path.join(dir, sub.name)))
+          dirs.push(path.join(dir, sub.name));
+    } catch {}
+  }
+  // You are your name *or* your email — people commit under a noreply
+  // address on one machine and a personal one on another. git ORs repeated
+  // --author patterns. $IZAKAYA_AUTHOR (a git --author pattern) overrides.
+  const override = (process.env.IZAKAYA_AUTHOR || "").trim();
+  const authors = override
+    ? [override]
+    : [await git(ROOT, "config", "user.name"), await git(ROOT, "config", "user.email")].filter(Boolean);
+  const author = authors.join(" | ");
+  if (!authors.length) {
+    console.error("izakaya: who are you? set IZAKAYA_AUTHOR or git config --global user.email");
+    process.exit(2);
+  }
+  const since = standupSince();
+  const plates = [];
+  const queue = [...dirs];
+  await Promise.all(
+    Array.from({ length: 4 }, async () => {
+      while (queue.length) {
+        const dir = queue.shift();
+        // every local branch, so work parked on a feature branch still counts
+        const log = await git(
+          dir, "log", "--branches", "--no-merges", `--since=${since.toISOString()}`,
+          ...authors.map((a) => `--author=${a}`), "--format=%ct%x00%s"
+        );
+        if (!log) continue;
+        const pours = log.split("\n").filter(Boolean).map((l) => {
+          const [ct, msg] = l.split("\0");
+          return { ct: parseInt(ct, 10) || 0, msg: scrubText(msg || "") };
+        });
+        if (pours.length)
+          plates.push({ name: scrubText(path.relative(ROOT, dir)), dir, pours });
+      }
+    })
+  );
+  plates.sort((a, b) => b.pours[0].ct - a.pours[0].ct);
+  const total = plates.reduce((n, p) => n + p.pours.length, 0);
+  if (asJson) {
+    process.stdout.write(
+      JSON.stringify(
+        { izakaya: VERSION, root: ROOT, author, since: since.toISOString(), pours: total, plates },
+        null,
+        2
+      ) + "\n"
+    );
+    process.exit(0);
+  }
+  const tty = !!process.stdout.isTTY;
+  const strip = (s) => (tty ? s : s.replace(ANSI_RE, ""));
+  const day = since.toLocaleDateString("en-US", { weekday: "long" });
+  const lines = [];
+  if (!total) {
+    lines.push(`${fg(T.fgDim)}no pours since ${day} — a quiet night at the bar${RESET}`);
+  } else {
+    lines.push(
+      BOLD + "standup" + RESET +
+        ` — your pours since ${day} (${ROOT.replace(os.homedir(), "~")})`
+    );
+    for (const p of plates) {
+      lines.push(
+        `  ${fg(T.blue)}${BOLD}${p.name}${RESET}  ${fg(T.fgDim)}${p.pours.length} ` +
+          `pour${p.pours.length === 1 ? "" : "s"}${RESET}`
+      );
+      for (const pour of p.pours.slice(0, 8))
+        lines.push(`    ${fg(T.fgDim)}·${RESET} ${pour.msg}  ${fg(T.fgDim)}${relTime(pour.ct)}${RESET}`);
+      if (p.pours.length > 8) lines.push(`    ${fg(T.fgDim)}+${p.pours.length - 8} more${RESET}`);
+    }
+    lines.push(
+      `${total} pour${total === 1 ? "" : "s"} across ${plates.length} ` +
+        `plate${plates.length === 1 ? "" : "s"}`
+    );
+  }
+  process.stdout.write(strip(lines.join("\n")) + "\n");
+  process.exit(0);
 }
 
 function printReport(plates) {
@@ -1416,10 +1681,10 @@ function headerLine(W) {
   const home = ROOT.replace(os.homedir(), "~");
   const dirtyCount = state.repos.filter((r) => r.dirty > 0).length;
   let s = bg(T.bg) + fg(T.seg0) + "░▒▓";
-  s += bg(T.seg0) + fg("#090c0c") + ` ${G.lantern} ` ;
+  s += bg(T.seg0) + fg(T.segInk) + ` ${G.lantern} ` ;
   s += bg(T.seg1) + fg(T.seg0) + G.sep;
   s += bg(T.seg1) + fg(T.segFg) + BOLD + ` 居酒屋 izakaya ` + RESET +
-    bg(T.seg1) + fg(T.seg0) + `v${VERSION} ` + RESET;
+    bg(T.seg1) + fg(T.segInk) + `v${VERSION} ` + RESET;
   s += bg(T.seg2) + fg(T.seg1) + G.sep;
   s += bg(T.seg2) + fg(T.seg1) + ` ${G.folder} ${home} `;
   s += bg(T.seg3) + fg(T.seg2) + G.sep;
@@ -1432,6 +1697,9 @@ function headerLine(W) {
   s += bg(T.seg4) + fg(T.seg3) + G.sep;
   s += bg(T.seg4) + fg(dirtyCount ? T.yellow : T.segDim) +
     ` ${dirtyCount ? `${G.dot} ${dirtyCount} dirty` : `${G.ok} all clean`} `;
+  // agents mid-conversation anywhere on the menu
+  const cooking = treeRepos().filter((r) => agentLive(r)).length;
+  if (cooking) s += fg(T.magenta) + `${G.agent} ${cooking} cooking `;
   s += RESET + bg(T.bg) + fg(T.seg4) + G.sep;
 
   // mirrored right side, like a starship right-prompt: time → sky → ▓▒░
@@ -1442,7 +1710,7 @@ function headerLine(W) {
     fg(T.seg2) + G.sepL +
     bg(T.seg2) + fg(T.segDim) + ` ${G.clock} ${time} ` +
     fg(T.seg0) + G.sepL +
-    bg(T.seg0) + fg("#090c0c") + ` ${sky} ` +
+    bg(T.seg0) + fg(T.segInk) + ` ${sky} ` +
     RESET + bg(T.bg) + fg(T.seg0) + "▓▒░";
 
   const gap = W - visW(s) - visW(right);
@@ -1508,16 +1776,43 @@ function footerLine(W) {
         ["~", "colophon"],
         ["q", "leave"],
       ];
-  for (const [k, label] of keys)
-    s +=
-      bg(T.seg3) + fg(T.seg1) + BOLD + ` ${k} ` + RESET +
-      bg(T.bg) + fg(T.fgDim) + ` ${label}  `;
-  return padW(truncW(s, W), W) + RESET;
+  const chip = ([k, label]) =>
+    bg(T.seg3) + fg(T.seg1) + BOLD + ` ${k} ` + RESET +
+    bg(T.bg) + fg(T.fgDim) + ` ${label}  `;
+  // a narrow room drops chips from the middle — `?` (the back page, where
+  // every key lives) and `q` always keep their stools at the end
+  const pinned = (k) => k === "?" || k === "q";
+  const tail = keys.filter(([k]) => pinned(k)).map(chip).join("");
+  let room = W - visW(s) - visW(tail);
+  for (const kv of keys) {
+    if (pinned(kv[0])) continue;
+    const c = chip(kv);
+    if (visW(c) > room) break;
+    s += c;
+    room -= visW(c);
+  }
+  return padW(truncW(s + tail, W), W) + RESET;
 }
 
 const STALE_S = 180 * 86400; // half a year untouched and the plate gathers dust
 
+// When you last had your hands on a plate: its newest commit, or its newest
+// uncommitted edit if that's later. Sorting and dust both read this.
+const lastSeen = (r) => Math.max(r.lastUnix || 0, r.touchedUnix || 0);
+
+// Off the main line — the plate's checked out on something other than its
+// default branch (origin's HEAD when known; main/master/trunk otherwise).
+// Detached HEAD counts. The branch you forgot you were on is the one that
+// bites, so the menu row names it.
+function offBranch(r) {
+  if (!r.isGit || !r.branch || r.branch === "—") return null;
+  if (r.branch === "HEAD") return "detached";
+  const home = r.defaultBranch ? [r.defaultBranch] : ["main", "master", "trunk"];
+  return home.includes(r.branch) ? null : r.branch;
+}
+
 function listRow(repo, selected, W) {
+  const flat = !!state.filter;
   const base = selected ? bg(T.bgHi) : bg(T.bgPanel);
   // the accent stays blue while you browse the menu; behind the bar it dims,
   // and the divider lights up instead — so it's always clear which pane is live
@@ -1526,11 +1821,11 @@ function listRow(repo, selected, W) {
     : fg(T.bgPanel) + " ";
   const lm = repo.langs[0] && langMeta(repo.langs[0].name);
   const icon = lm ? fg(lm.color) + lm.icon : fg(T.fgFaint) + G.folder;
-  const stale =
-    repo.isGit && repo.lastUnix > 0 && Date.now() / 1000 - repo.lastUnix > STALE_S;
+  const seen = lastSeen(repo);
+  const stale = seen > 0 && Date.now() / 1000 - seen > STALE_S;
   const nameC = selected ? fg(T.fg) + BOLD : stale ? fg(T.fgDim) : fg(T.fg);
   const dirtyMark = !repo.isGit
-    ? fg(T.fgFaint) + "·"
+    ? ""
     : repo.dirty > 0
       ? fg(T.yellow) + G.dot
       : stale
@@ -1549,19 +1844,34 @@ function listRow(repo, selected, W) {
         : "";
   // new pours since your last visit — reads away on the next rescan
   const freshMark = repo.fresh ? fg(T.teal) + "+" : "";
-  const age = fg(T.fgDim) + relTime(repo.lastUnix);
+  // an agent talking at this plate right now
+  const liveMark = agentLive(repo) ? fg(T.magenta) + G.agent : "";
+  // the age is when you last touched it — yellow when that touch is an
+  // uncommitted edit newer than the last pour, so work-in-hand reads warm
+  const warm = repo.isGit && repo.touchedUnix > repo.lastUnix;
+  const age = seen ? (warm ? fg(T.yellow) : fg(T.fgDim)) + relTime(seen) : "";
   // Nested rows spend their width on the folder name and hierarchy. Their
   // full status is already on the dashboard as soon as the row is selected.
-  const right = repo.depth ? `${dirtyMark}` : `${freshMark}${dirtyMark}${aheadMark} ${age}`;
+  const marks = `${liveMark}${freshMark}${dirtyMark}${aheadMark}`;
+  const right = repo.depth && !flat
+    ? `${liveMark}${dirtyMark}`
+    : `${marks}${marks && age ? " " : ""}${age}`;
   const rightW = visW(right);
-  const indent = "  ".repeat(repo.depth || 0);
-  const branch = repo.depth ? `${fg(T.fgFaint)}└ ` : "";
+  // a filter ranks matches out of tree order, so rows go flat and a nested
+  // plate wears its parent's path instead of an indent
+  const indent = flat ? "" : "  ".repeat(repo.depth || 0);
+  const limb = repo.depth && !flat ? `${fg(T.fgFaint)}└ ` : "";
+  const parent = repo.depth && flat
+    ? `${fg(T.fgDim)}  ${G.folder} ${path.relative(ROOT, path.dirname(repo.dir))}`
+    : "";
+  const off = offBranch(repo);
+  const branchTag = off ? `${fg(T.fgDim)}  ${G.branch} ${off}` : "";
   const disclosure = repo.children === null
     ? `${fg(T.fgFaint)}› `
     : repo.children.length
       ? `${fg(T.blue)}${repo.expanded ? "⌄" : "›"} `
       : "  ";
-  let left = `${accent}${base} ${indent}${branch}${disclosure}${icon} ${nameC}${base}${repo.name}${RESET}${base}`;
+  let left = `${accent}${base} ${indent}${limb}${disclosure}${icon} ${nameC}${base}${repo.name}${RESET}${base}${parent}${branchTag}`;
   left = truncW(left, W - rightW - 2) + base;
   const gap = W - visW(left) - rightW - 1;
   return base + left + " ".repeat(Math.max(1, gap)) + right + " " + RESET;
@@ -1624,7 +1934,7 @@ function detailLines(repo, W, focusIdx = -1) {
   const icon = (repo.langs[0] && langMeta(repo.langs[0].name).icon) || G.folder;
   pad(
     "  " + fg(T.seg0) + "░▒▓" +
-    bg(T.seg0) + fg("#090c0c") + ` ${icon} ` +
+    bg(T.seg0) + fg(T.segInk) + ` ${icon} ` +
     bg(T.seg1) + fg(T.seg0) + G.sep +
     bg(T.seg1) + fg(T.segFg) + BOLD + ` ${repo.name} ` + RESET +
     bg(T.seg2) + fg(T.seg1) + G.sep +
@@ -1663,13 +1973,18 @@ function detailLines(repo, W, focusIdx = -1) {
     );
     pad(
       `  ${fg(T.fgDim)}${G.clock} ${relTime(repo.lastUnix)}${
-        repo.lastAuthor ? fg(T.fgFaint) + ` by ${repo.lastAuthor}` : ""
+        repo.lastAuthor ? fg(T.fgDim) + ` by ${repo.lastAuthor}` : ""
       }` +
         // the count comes with the second pour — don't claim 0 before it lands
         (repo.cooked
           ? `  ${fg(T.fgDim)}· ${repo.commits} commit${repo.commits === 1 ? "" : "s"}`
           : "")
     );
+    if (repo.touchedUnix > repo.lastUnix)
+      pad(
+        `  ${fg(T.yellow)}${G.edit} last touch ${relTime(repo.touchedUnix)}` +
+          `${fg(T.fgDim)} — uncommitted, still on the stove`
+      );
     for (let i = 1; i < repo.recent.length; i++) {
       const rc = repo.recent[i];
       const limb = i === repo.recent.length - 1 ? "└" : "├";
@@ -1680,7 +1995,7 @@ function detailLines(repo, W, focusIdx = -1) {
     pad(
       repo.remote
         ? `  ${fg(T.fgDim)}${G.remote} ${fg(T.cyan)}${repo.remote}`
-        : `  ${fg(T.fgDim)}${G.remote} ${fg(T.fgFaint)}no remote — house brew only`
+        : `  ${fg(T.fgDim)}${G.remote} no remote — house brew only`
     );
     // word from the street — gh's answer, when one came back
     if (repo.gh !== undefined) {
@@ -1760,7 +2075,7 @@ function detailLines(repo, W, focusIdx = -1) {
           : gradColor((i / repo.weeks.length) * 0.9) +
             SPARK[Math.min(7, Math.max(1, Math.ceil((repo.weeks[i] / peak) * 7)))];
       pad(
-        `  ${fg(T.fgDim)}${G.pulse} pours   ${spark}${RESET}${bg(T.bg)}  ${fg(T.fgFaint)}12 weeks` +
+        `  ${fg(T.fgDim)}${G.pulse} pours   ${spark}${RESET}${bg(T.bg)}  ${fg(T.fgDim)}12 weeks` +
           (repo.weeks.every((w) => w === 0) ? " — the kitchen sleeps" : "") +
           (repo.fresh
             ? `  ${fg(T.teal)}+${repo.fresh} since your last visit`
@@ -1770,7 +2085,7 @@ function detailLines(repo, W, focusIdx = -1) {
         pad(
           `  ${fg(T.fgDim)}${G.users} chefs   ` +
             repo.chefs
-              .map(([n, c]) => `${fg(T.fg)}${n} ${fg(T.fgFaint)}${c}`)
+              .map(([n, c]) => `${fg(T.fg)}${n} ${fg(T.fgDim)}${c}`)
               .join(`${fg(T.fgDim)}  ·  `)
         );
       pad(
@@ -1781,9 +2096,22 @@ function detailLines(repo, W, focusIdx = -1) {
             ? `  ·  ${fg(T.cyan)}${G.ahead}${repo.unpushed}${fg(T.fgDim)} unpushed`
             : "")
       );
+      // side kitchens — linked worktrees, where parallel work usually lives
+      const wts = repo.worktrees || [];
+      for (let i = 0; i < Math.min(wts.length, 4); i++) {
+        const wt = wts[i];
+        const label = i === 0 ? "side    " : "        ";
+        pad(
+          `  ${fg(T.fgDim)}${i === 0 ? G.folder : " "} ${label}${fg(T.magenta)}${wt.branch}` +
+            `${fg(T.fgDim)}  ${wt.path.replace(os.homedir(), "~")}`
+        );
+      }
+      if (wts.length > 4) pad(`  ${fg(T.fgDim)}           +${wts.length - 4} more side kitchens`);
     }
   } else {
-    pad(`  ${fg(T.orange)}${G.warn} not a git repo ${fg(T.fgFaint)}— off-menu item`);
+    pad(`  ${fg(T.orange)}${G.warn} not a git repo ${fg(T.fgDim)}— off-menu item`);
+    if (repo.touchedUnix)
+      pad(`  ${fg(T.fgDim)}${G.clock} last touched ${relTime(repo.touchedUnix)}`);
   }
 
   pad();
@@ -1815,8 +2143,12 @@ function detailLines(repo, W, focusIdx = -1) {
     pad(rule("the hand behind the bar"));
     const a = repo.ai;
     const pct = a.total ? Math.round((a.assisted / a.total) * 100) : 0;
+    // one house signing → name it; several → they share the credit
+    const hands = [...new Set(a.models.map((m) => m.agent || "Claude"))];
+    const who = hands.length === 1 ? hands[0] : "agents";
+    const glyph = hands.length === 1 && hands[0] === "Claude" ? G.claude : G.agent;
     pad(
-      `  ${fg(T.magenta)}${G.claude} ${fg(T.fg)}Claude${fg(T.fgDim)} had a hand in ` +
+      `  ${fg(T.magenta)}${glyph} ${fg(T.fg)}${who}${fg(T.fgDim)} had a hand in ` +
         `${fg(T.fg)}${pct}%${fg(T.fgDim)} of the last ${a.total} ` +
         `${a.total === 1 ? "pour" : "pours"}  ${fg(T.fgFaint)}(${a.assisted} ` +
         `commit${a.assisted === 1 ? "" : "s"})`
@@ -1836,14 +2168,17 @@ function detailLines(repo, W, focusIdx = -1) {
   }
 
   if (repo.agents?.length) {
-    const defs = new Map(agentDefinitions().map((a) => [a.id, a]));
+    const defs = new Map(agentsOnFile().map((a) => [a.id, a]));
     pad();
     pad(rule("agents at the bar"));
     for (const session of repo.agents) {
       const agent = defs.get(session.id) || { label: session.id, icon: "agent" };
+      const live = Date.now() / 1000 - session.lastUnix < LIVE_S;
       pad(
         `  ${fg(T.magenta)}${G[agent.icon] || G.agent} ${fg(T.fg)}${agent.label}` +
-          `${fg(T.fgDim)} last spoke ${relTime(session.lastUnix)}`
+          (live
+            ? `  ${fg(T.magenta)}${G.dot} cooking now`
+            : `${fg(T.fgDim)} last spoke ${relTime(session.lastUnix)}`)
       );
     }
     pad(`  ${fg(T.fgFaint)}press ${fg(T.magenta)}a${fg(T.fgFaint)} to start or resume an agent here`);
@@ -1873,7 +2208,7 @@ function peekPane(peek, W) {
   L.push("");
   L.push(
     "  " + fg(T.seg0) + "░▒▓" +
-    bg(T.seg0) + fg("#090c0c") + ` ${G.file} ` +
+    bg(T.seg0) + fg(T.segInk) + ` ${G.file} ` +
     bg(T.seg1) + fg(T.seg0) + G.sep +
     bg(T.seg1) + fg(T.segFg) + BOLD + ` ${truncW(peek.file, W - 24)} ` + RESET +
     bg(T.seg2) + fg(T.seg1) + G.sep +
@@ -2060,14 +2395,14 @@ function askFrame(W, H) {
   return lines;
 }
 
-// The back page of the menu — every key, including the ones the footer
-// doesn't have room for.
+// Who's pulling up a stool — the agent picker for the exact plate under the
+// cursor: start fresh, or resume where a session already sat.
 function agentFrame(W, H) {
   const center = (s) =>
     bg(T.bg) + " ".repeat(Math.max(0, Math.floor((W - visW(s)) / 2))) + s;
   const blank = bg(T.bg) + " ".repeat(W) + RESET;
   const repo = state.agentPicker && findRepo(state.agentPicker.repoDir);
-  const agents = agentDefinitions();
+  const agents = agentsOnFile();
   const sessions = new Map((repo?.agents || []).map((s) => [s.id, s]));
   if (state.agentPicker)
     state.agentPicker.sel = Math.max(0, Math.min(agents.length - 1, state.agentPicker.sel));
@@ -2097,7 +2432,7 @@ function agentFrame(W, H) {
     ));
   }
   body.push(blank);
-  body.push(center(fg(T.fgFaint) + "↑/↓ choose  ·  enter smart open  ·  n new  ·  r resume  ·  esc close") + RESET);
+  body.push(center(fg(T.fgDim) + "↑/↓ choose  ·  enter smart open  ·  n new  ·  r resume  ·  esc close") + RESET);
   const top = Math.max(0, Math.floor((H - body.length) / 2));
   return Array.from({ length: H }, (_, i) => {
     const line = body[i - top];
@@ -2105,6 +2440,8 @@ function agentFrame(W, H) {
   });
 }
 
+// The back page of the menu — every key, including the ones the footer
+// doesn't have room for.
 function helpFrame(W, H) {
   const center = (s) =>
     bg(T.bg) + " ".repeat(Math.max(0, Math.floor((W - visW(s)) / 2))) + s;
@@ -2275,48 +2612,59 @@ function colophonFrame(W, H) {
   return lines;
 }
 
+// One frame, one atomic paint. Synchronized output (DEC mode 2026) asks the
+// terminal to hold the screen until the whole frame has landed, so a big
+// repaint never shows half an old plate under a new ribbon. Terminals that
+// don't know the mode ignore it.
+function paint(lines) {
+  out.write("\x1b[?2026h\x1b[H" + lines.join("\r\n") + "\x1b[?2026l");
+}
+
 function render() {
   const W = out.columns || 80;
   const H = out.rows || 24;
 
   if (state.leaving) {
-    out.write("\x1b[H" + farewellFrame(W, H).join("\r\n"));
+    paint(farewellFrame(W, H));
     return;
   }
 
   if (state.asking) {
-    out.write("\x1b[H" + askFrame(W, H).join("\r\n"));
+    paint(askFrame(W, H));
     return;
   }
 
   if (state.splash) {
-    out.write("\x1b[H" + splashFrame(W, H).join("\r\n"));
+    paint(splashFrame(W, H));
     return;
   }
 
   if (state.help) {
-    out.write("\x1b[H" + helpFrame(W, H).join("\r\n"));
+    paint(helpFrame(W, H));
     return;
   }
 
   if (state.agentPicker) {
-    out.write("\x1b[H" + agentFrame(W, H).join("\r\n"));
+    paint(agentFrame(W, H));
     return;
   }
 
   if (state.colophon) {
-    out.write("\x1b[H" + colophonFrame(W, H).join("\r\n"));
+    paint(colophonFrame(W, H));
     return;
   }
 
   if (state.stove) {
-    out.write("\x1b[H" + stoveFrame(W, H).join("\r\n"));
+    paint(stoveFrame(W, H));
     return;
   }
   const listW = Math.max(26, Math.min(38, Math.floor(W * 0.34)));
   const bodyH = H - 4; // header, rule, rule, footer
 
-  // keep selection visible
+  // keep selection visible, and don't leave empty stools at the bottom
+  // when the menu shrinks or the window grows under a scrolled list
+  const vis = visible();
+  state.scroll = Math.max(0, Math.min(state.scroll, vis.length - bodyH));
   if (state.sel < state.scroll) state.scroll = state.sel;
   if (state.sel >= state.scroll + bodyH) state.scroll = state.sel - bodyH + 1;
 
@@ -2324,7 +2672,6 @@ function render() {
   lines.push(headerLine(W));
   lines.push(hr(W));
 
-  const vis = visible();
   const sel = vis[state.sel];
   const focusIdx =
     state.focus === "board" && sel?.changes?.length ? state.boardSel : -1;
@@ -2381,7 +2728,7 @@ function render() {
 
   lines.push(hr(W));
   lines.push(footerLine(W));
-  out.write("\x1b[H" + lines.join("\r\n"));
+  paint(lines);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2446,6 +2793,8 @@ function findRepo(dir, repos = state.repos) {
   return null;
 }
 
+const pouringRooms = new Set(); // dirs whose side rooms are pouring right now
+
 async function expandRepo(repo) {
   // A filter is a way to find the doorway, not a wall around its children.
   // Clear it before opening the tree, then keep the same absolute path selected.
@@ -2456,13 +2805,16 @@ async function expandRepo(repo) {
     if (i >= 0) state.sel = i;
   }
   if (repo.children === null) {
+    // a second → while the rooms are still pouring would pour them twice
+    if (pouringRooms.has(repo.dir)) return;
+    pouringRooms.add(repo.dir);
     flash(`${G.sake} checking ${repo.name}'s side rooms…`);
-    const dirs = await folderChildren(repo);
-    const children = await Promise.all(
-      dirs.map((d) => scanRepo(d, repo.dir, (repo.depth || 0) + 1))
-    );
-    const histories = await Promise.all(children.map((child) => enrichRepo(child)));
-    for (let i = 0; i < children.length; i++) Object.assign(children[i], histories[i]);
+    let children;
+    try {
+      children = await pourChildren(repo);
+    } finally {
+      pouringRooms.delete(repo.dir);
+    }
     // A root rescan may have replaced the plate while its side rooms poured.
     // Land on the live object so the result is not lost.
     repo = findRepo(repo.dir) || repo;
@@ -2569,6 +2921,17 @@ async function openPeek(repo, ch) {
   const p = changePath(ch);
   state.peek = { file: p, lines: null, scroll: 0 };
   render();
+  // an untracked folder is one ?? line on the tab — pour what's inside it
+  if (p.endsWith("/")) {
+    const files = await git(repo.dir, "ls-files", "--others", "--exclude-standard", "--", p);
+    if (state.peek?.file !== p) return;
+    const list = files ? files.split("\n").filter(Boolean) : [];
+    state.peek.lines = list.length
+      ? [`new folder — ${list.length} untracked file${list.length === 1 ? "" : "s"}`, "",
+         ...list.slice(0, 2000).map((f) => "+ " + scrubText(f))]
+      : [];
+    return render();
+  }
   let text = await git(repo.dir, "diff", "HEAD", "--", p);
   if (!text) text = await git(repo.dir, "diff", "--", p);
   if (!text) text = await git(repo.dir, "diff", "--cached", "--", p);
@@ -2658,7 +3021,7 @@ function onKey(buf) {
   }
 
   if (state.agentPicker) {
-    const agents = agentDefinitions();
+    const agents = agentsOnFile();
     if (k === "\x1b" || k === "q") {
       state.agentPicker = null;
       return render();
@@ -3021,6 +3384,24 @@ if (IS_MAIN && !TAKEOUT)
     render();
   }, 1000);
 
+// ── The agent pulse ──────────────────────────────────────────────────────
+// Agents work while you browse. Every 20 seconds the bar re-reads who's been
+// talking (session-file mtimes only — nothing opened that wasn't already)
+// so the magenta marks and the header's "cooking" count stay true.
+let pulsing = false;
+if (IS_MAIN && !TAKEOUT)
+  setInterval(async () => {
+    if (state.scanning || state.leaving || pulsing) return;
+    pulsing = true;
+    try {
+      codexSessionsPromise = undefined;
+      for (const r of treeRepos()) r.agents = await agentSessions(r.dir);
+    } finally {
+      pulsing = false;
+    }
+    render();
+  }, 20_000);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Platform — the launch keys (o t e c b y) are the only things that touch the
 // OS, so the OS lives here and nowhere else. Detect once; each primitive does
@@ -3232,6 +3613,7 @@ if (TAKEOUT) {
     if (e.code === "EPIPE") process.exit(0);
     throw e;
   });
+  if (TAKEOUT === "standup") await printStandup(TAKEOUT_JSON);
   const plates = await scanHeadless();
   if (TAKEOUT === "report") printReport(plates);
   else printClosingTime(plates, TAKEOUT_JSON);
@@ -3309,8 +3691,9 @@ export {
   charW, visW, truncW, padW,
   fuzzyScore, relTime, fmtBytes,
   changeMark, changePath, scrubRemote,
-  expandHome, shq, isPaste, printable, chopChar,
+  expandHome, shq, isPaste, printable, chopChar, scrubText,
   applyTheme, gradColor, langMeta, closingFacts,
-  agentDefinitions, codexSessionMeta,
+  agentDefinitions, codexSessionMeta, aiTally, parseWorktrees,
+  offBranch, lastSeen, standupSince,
   THEMES, T, LANGS, G,
 };

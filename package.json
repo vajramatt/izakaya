@@ -1,6 +1,6 @@
 {
   "name": "izakaya",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "居酒屋 — a cozy TokyoNight TUI where your repos are the menu",
   "type": "module",
   "bin": {

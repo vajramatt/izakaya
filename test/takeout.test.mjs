@@ -33,8 +33,10 @@ const git = (cwd, ...args) =>
 
 // izakaya itself; exit codes come back instead of throwing
 async function order(...args) {
+  // a trailing { env } object tops up the environment for this order only
+  const env = typeof args.at(-1) === "object" ? { ...process.env, ...args.pop().env } : process.env;
   try {
-    const { stdout } = await execFile(process.execPath, [BIN, ...args]);
+    const { stdout } = await execFile(process.execPath, [BIN, ...args], { env });
     return { code: 0, stdout };
   } catch (e) {
     if (typeof e.code !== "number") throw e; // a real failure, not an exit code
@@ -150,4 +152,66 @@ test("--closing-time: a clean stove exits 0", async () => {
 test("takeout: an unreadable root exits 2", async () => {
   const { code } = await order("--report", path.join(bar, "no-such-street"));
   assert.equal(code, 2);
+});
+
+test("--report: a hostile repo's escapes never reach the plate", async () => {
+  const shady = await fs.mkdtemp(path.join(os.tmpdir(), "izakaya-shady-"));
+  try {
+    const repo = path.join(shady, "evil");
+    await fs.mkdir(repo);
+    await git(repo, "init", "-q");
+    await fs.writeFile(path.join(repo, "README.md"), "Hi \x1b]0;PWNED\x07 there\n");
+    await git(repo, "add", "-A");
+    await git(repo, "-c", "user.name=Mal\x1b[5m", "commit", "-qm", "feat: \x1b]52;c;cm0=\x07 ok");
+    const { code, stdout } = await order(shady, "--report");
+    assert.equal(code, 0);
+    const [plate] = JSON.parse(stdout).plates;
+    for (const v of [plate.lastMsg, plate.lastAuthor, plate.readmeTitle, ...plate.recent.map((r) => r.msg), ...plate.chefs.map(([n]) => n)])
+      assert.doesNotMatch(v, /[\x00-\x1f\x7f-\x9f]/, JSON.stringify(v));
+  } finally {
+    await fs.rm(shady, { recursive: true, force: true });
+  }
+});
+
+test("--report: uncommitted work carries a touch time and floats up", async () => {
+  const { stdout } = await order("--report", bar);
+  const { plates } = JSON.parse(stdout);
+  const miso = plates.find((p) => p.name === "miso-repo");
+  assert.ok(miso.touchedUnix >= miso.lastUnix, "wip.js is newer than the last pour");
+  const tofu = plates.find((p) => p.name === "tofu-notes");
+  assert.ok(tofu.touchedUnix > 0, "a non-git folder still knows its newest file");
+  assert.deepEqual(miso.worktrees, []);
+});
+
+test("--standup: your pours, by name or email, across plates and studio folders", async () => {
+  const room = await fs.mkdtemp(path.join(os.tmpdir(), "izakaya-standup-"));
+  try {
+    const mine = path.join(room, "ramen");
+    const nested = path.join(room, "studio", "udon");
+    await fs.mkdir(mine);
+    await fs.mkdir(nested, { recursive: true });
+    for (const dir of [mine, nested]) {
+      await git(dir, "init", "-q");
+      await fs.writeFile(path.join(dir, "a.txt"), "a\n");
+      await git(dir, "add", "-A");
+      await git(dir, "commit", "-qm", `feat: ${path.basename(dir)} bowl`);
+    }
+    // someone else's pour in the same kitchen stays out of your standup
+    await fs.writeFile(path.join(mine, "b.txt"), "b\n");
+    await git(mine, "add", "-A");
+    await git(mine, "-c", "user.name=somebody", "-c", "user.email=s@else.com", "commit", "-qm", "not mine");
+
+    const { code, stdout } = await order("--standup", "--json", room, { env: { IZAKAYA_AUTHOR: "t@example.com" } });
+    assert.equal(code, 0);
+    const up = JSON.parse(stdout);
+    assert.equal(up.pours, 2);
+    assert.deepEqual(up.plates.map((p) => p.name).sort(), ["ramen", path.join("studio", "udon")]);
+    assert.ok(up.plates.every((p) => p.pours.every((x) => x.msg !== "not mine")));
+
+    const text = await order("--standup", room, { env: { IZAKAYA_AUTHOR: "nobody-at-all" } });
+    assert.equal(text.code, 0);
+    assert.match(text.stdout, /no pours since/);
+  } finally {
+    await fs.rm(room, { recursive: true, force: true });
+  }
 });

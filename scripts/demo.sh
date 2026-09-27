@@ -6,7 +6,9 @@
 set -euo pipefail
 
 DEMO="${1:-/tmp/izakaya-demo}"
-rm -rf "$DEMO"
+# worktrees live beside the bar, not on it — like a real side kitchen
+WT="${DEMO}-worktrees"
+rm -rf "$DEMO" "$WT"
 mkdir -p "$DEMO"
 DEMO_CONFIG="/tmp/izakaya-demo-config"
 rm -rf "$DEMO_CONFIG"
@@ -61,8 +63,17 @@ mkdir -p "$R/src"
 lorem "$R/src/index.ts" 9000
 lorem "$R/src/broth.ts" 6000
 lorem "$R/src/noodles.ts" 4000
-pad_commits "$R" "Yuki Tanaka" 24 4
-ci "$R" "Yuki Tanaka" 3 "feat: tonkotsu middleware for sticky sessions"
+pad_commits "$R" "Yuki Tanaka" 22 5
+# agents sign the pours they help with — the plate's "hand behind the bar"
+ci "$R" "Yuki Tanaka" 5 "feat: broth temperature probes
+
+Co-Authored-By: Codex <noreply@openai.com>"
+ci "$R" "Yuki Tanaka" 4 "fix: noodle timeout under load
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
+ci "$R" "Yuki Tanaka" 3 "feat: tonkotsu middleware for sticky sessions
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 git -C "$R" remote add origin git@github.com:yukitanaka/ramen-router.git
 
 # ── yuzu-ui — TS+CSS, react+tailwind, dirty, no CLAUDE.md ────────────────────
@@ -95,6 +106,8 @@ EOF
 pad_commits "$R" "Kenji Sato" 11 30
 ci "$R" "Kenji Sato" 26 "fix: modal focus trap escapes on shoji slide"
 git -C "$R" remote add origin git@github.com:kenjisato/yuzu-ui.git
+# mid-feature: off main, edits still warm — it floats to the top of the menu
+git -C "$R" checkout -q -b feat/toast
 lorem "$R/src/Toast.tsx" 2000   # uncommitted
 echo "/* wip */" >> "$R/src/zest.css"
 # the uncommitted pour the peek opens on — a warm color and a new rule
@@ -166,6 +179,8 @@ lorem "$R/src/shrine.css" 3000
 pad_commits "$R" "Mei Kobayashi" 31 8
 ci "$R" "Mei Kobayashi" 6 "feat: torii gate parallax on scroll"
 git -C "$R" remote add origin git@github.com:meikobayashi/hologram-shrine.git
+# a side kitchen: a linked worktree where a parallel change is simmering
+git -C "$R" worktree add -q -b feat/koi-pond "$WT/koi-pond"
 
 # ── katana-cli — Shell, old & clean ──────────────────────────────────────────
 mk katana-cli
@@ -204,5 +219,11 @@ echo 'A small service that keeps the lanterns lit.' >> "$R/README.md"
 lorem "$R/main.go" 6500
 pad_commits "$R" "Mina Park" 4 28
 ci "$R" "Mina Park" 20 "feat: report lantern health"
+
+# Staging just wrote every file, so every file reads "just now" — and the
+# menu sorts by last touch. Settle the whole bar back a month, then warm only
+# yuzu-ui's uncommitted edits: it's the one plate somebody's mid-way through.
+find "$DEMO" "$WT" -path '*/.git' -prune -o -exec touch -t "$(date -v -30d '+%Y%m%d%H%M')" {} +
+git -C "$DEMO/yuzu-ui" status --porcelain | cut -c4- | while read -r f; do touch "$DEMO/yuzu-ui/$f"; done
 
 echo "demo bar stocked at $DEMO"

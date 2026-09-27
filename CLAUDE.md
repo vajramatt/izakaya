@@ -69,14 +69,24 @@ menu at a small Tokyo bar.
   fast, then an enrich pass for the history walks (sparkline, chefs, AI
   tally). `ENRICH_KEYS` lists the second-pour fields; `cooked` marks a plate
   whose history is current. Renders progressively through both.
-- **The takeout window** (`--report`, `--closing-time [--json]`) is the
-  headless path: same two pours, no TTY, prints and exits. It must stay
+- **The takeout window** (`--report`, `--closing-time [--json]`,
+  `--standup [--json]`) is the headless path: no TTY, prints and exits.
+  `--report`/`--closing-time` run the same two pours; `--standup` only asks
+  `git log`. It must stay
   side-effect free — nothing written, not even the menu cache — and its
   closing-time facts come from `closingFacts`, shared with the `!` scene so
   the two can't drift. `--report`'s shape is a published schema (stamped
   with `MENU_V`): changing a plate field means bumping `MENU_V`.
 - Width math is ANSI-aware and CJK-aware (`visW`/`truncW`/`padW`) — any new
   rendering must go through those helpers or alignment breaks.
+- **A repo's words are untrusted.** Anything read out of a scanned repo —
+  commit subjects, authors, README lines, folder names, worktree paths — goes
+  through `scrubText` at scan time, before it's cached or painted. A raw ESC
+  in a commit message is a command to the user's terminal.
+- Frames go out through `paint()`, one write wrapped in synchronized output
+  (DEC 2026) so a repaint never tears.
+- The agent pulse (every 20s) re-reads session-file mtimes only; `LIVE_S`
+  decides when an agent counts as "cooking".
 
 ## Testing
 

@@ -17,12 +17,18 @@ It's built to answer the three questions a work morning starts with:
 
 - **What changed while I was gone?** The bar remembers your last visit and
   says so — new pours, plates that joined the menu, work that went unsettled.
-- **What needs me?** Dirty plates and unpushed pours are marked on the menu;
-  `!` is closing time — one screen of everything that exists only on this
-  machine, down to the stash you forgot and the branch that never got pushed.
+- **What needs me?** Dirty plates and unpushed pours are marked on the menu,
+  the plate you're mid-way through floats to the top, a row names the branch
+  when it isn't the main line, and a magenta mark shows where an agent is
+  working right now. `!` is closing time — one screen of everything that
+  exists only on this machine, down to the stash you forgot and the branch
+  that never got pushed.
 - **Take me there.** `iz ramen` from the shell seats you in the repo before
   the bar even opens; inside, `↵` on a changed file pours its diff, and one
   key opens the terminal, editor, or whichever coding agent you work with.
+
+And for the morning meeting, `izakaya --standup` lists everything you
+committed across every repo since the last workday.
 
 The header is styled after the Starship TokyoNight prompt, so it looks like
 the rest of the terminal it lives in. One file, no packages, no build step,
@@ -179,13 +185,27 @@ which directories count as projects.
 | `q` / esc | leave the bar — esc first clears any filter, then またね |
 
 The menu marks plates that need attention: `●` uncommitted changes, `⇡`
-commits you haven't pushed, and a small moon on plates untouched for half
-a year.
+commits you haven't pushed (cyan on this branch, orange on another), a
+magenta `◆` where an agent session is talking right now, and a small moon on
+plates untouched for half a year. A plate checked out on anything but its
+default branch names that branch beside its name.
+
+"Recent" means when you last had your hands on it: a plate's age is its
+newest commit — or, when you've edited since, its newest uncommitted change,
+shown in yellow. The repo you're mid-way through sits at the top even if its
+last commit was last week. Folders without git use their newest file.
+
+While a filter is on, matches are ranked rather than nested, so a subfolder
+shows its parent's path beside its name instead of an indent.
 
 The bar also remembers your last visit. When the first scan finishes it
 tells you what changed while you were gone — new pours, plates that joined
 or left the menu, work that went unsettled — and marks freshly-poured
 plates with a teal `+` until you rescan.
+
+The header counts agents cooking anywhere on the menu. Every 20 seconds the
+bar re-reads session timestamps (nothing else) so those marks stay current
+while you browse.
 
 And if GitHub's [`gh`](https://cli.github.com) CLI is installed, examining
 a plate (`→`) quietly asks the street about it: open PRs and the latest
@@ -281,13 +301,18 @@ Select a repo and the right panel fills in:
   status (modified, added, deleted, renamed, untracked), staged marked. Press
   `Tab` to step behind the bar and walk the tab with `↑`/`↓`; the file you're on
   glows orange, and `↵` peeks the pour — its diff, right there, read-only
-- **the last pour** and the few before it: recent commits with ages
+- **the last pour** and the few before it: recent commits with ages — plus
+  **the last touch** when uncommitted edits are newer than any commit
 - **the kitchen** — a 12-week sparkline of commit activity, the chefs who
-  cook here, and the shelf: branches, tags, stashes
+  cook here, the shelf (branches, tags, stashes), and the **side kitchens**:
+  linked git worktrees and their branches, where parallel work (often an
+  agent's) usually lives
 - **the pantry** — a language bar with percentages, file count, and size on
   disk
 - **the hand behind the bar** — factual commit attribution: how much recent
-  work carries Claude co-author trailers and which models are named
+  work carries a coding agent's `Co-authored-by` trailer (Claude, Codex,
+  Copilot, Cursor, Aider, Gemini), and which Claude models are named. Only
+  signed commits count; an agent that leaves no trailer leaves no mark
 - **agents at the bar** — local Claude Code and Codex sessions associated with
   this exact path, and when each last spoke (`a` starts or resumes one)
 - **word from the street** — with `gh` installed, the plate you examine
@@ -390,13 +415,15 @@ once before any repeats.
 ## The takeout window — for scripts, cron, and agents
 
 The bar is for people; the scanner is happy to serve anything that can read
-JSON. Two flags skip the TUI entirely — no TTY, no alt screen, and nothing
+JSON. Three flags skip the TUI entirely — no TTY, no alt screen, and nothing
 written, not even the menu cache:
 
 ```sh
 izakaya --report [root]          # the whole menu as one JSON document
 izakaya --closing-time [root]    # what dies with this laptop — plain text
 izakaya --closing-time --json    # the same sweep, structured
+izakaya --standup [root]         # your commits since the last workday
+izakaya --standup --json         # the same, structured
 ```
 
 `--report` prints every plate the bar would serve — git status, the open
@@ -414,6 +441,14 @@ a cron line or an agent heartbeat can nag without parsing a thing:
 ```sh
 izakaya --closing-time || say "the stove is still on"
 ```
+
+`--standup` is the morning meeting: every commit you made on any local
+branch since the last workday (yesterday; Monday and weekends look back to
+Friday), grouped by repo, newest first. It only asks `git log`, so it's
+quick, and it looks one level into folders that aren't repos, so projects
+grouped in a folder still report. "You" is your git `user.name` *or*
+`user.email`, which catches commits made under a noreply address on another
+machine. Set `IZAKAYA_AUTHOR` (any `git log --author` pattern) to override.
 
 Text output is colored on a TTY and plain in a pipe. Root resolution
 matches the bar: argument > `$IZAKAYA_ROOT` > saved config > `~/code`.
@@ -434,6 +469,12 @@ its own:
 
 Everything else — Finder, terminal windows, the editor, coding agents, the
 browser, the clipboard — is a launch, not a mutation.
+
+It's also safe to browse a stranger's clone. Commit messages, author names,
+README lines, and folder names are someone else's text, and raw they could
+carry terminal escape sequences (retitle your window, write your clipboard).
+Every control character is stripped before anything reaches the screen or
+`--report`.
 
 ## The demo GIF
 
