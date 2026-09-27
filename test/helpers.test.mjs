@@ -19,7 +19,7 @@ import {
   changeMark, changePath, scrubRemote,
   expandHome, shq, isPaste, printable, chopChar, scrubText,
   applyTheme, langMeta,
-  agentDefinitions, codexSessionMeta, aiTally, parseWorktrees,
+  agentDefinitions, codexSessionMeta, aiTally, codexModelLabel, parseWorktrees,
   offBranch, lastSeen, standupSince,
   THEMES, T, LANGS,
 } from "../bin/izakaya.js";
@@ -300,4 +300,21 @@ test("standupSince: yesterday, except Monday and weekends look back to Friday", 
   assert.deepEqual(day(at("2026-09-27T09:00:00")), [5, 0, 0]); // Sun → Fri
   assert.deepEqual(day(at("2026-09-26T09:00:00")), [5, 0, 0]); // Sat → Fri
   assert.equal(at("2026-09-28T09:00:00").getDate(), 25);
+});
+
+test("aiTally: Codex signs with its model in parentheses", () => {
+  const rec = (body) => `abc\x1f${body}\x1e`;
+  const t = aiTally([
+    rec("feat: a\n\nCo-authored-by: Codex (gpt-6-astra) <noreply@openai.com>"),
+    rec("feat: b\n\nCo-authored-by: Codex (gpt-6-astra) <noreply@openai.com>"),
+    rec("feat: c\n\nCo-authored-by: Codex (gpt-5.6-sol) <noreply@openai.com>"),
+    rec("feat: d\n\nCo-authored-by: Codex <noreply@openai.com>"),
+    rec("feat: e\n\nCo-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"),
+  ].join("\n"));
+  assert.deepEqual(
+    t.models.map((m) => [m.label, m.agent, m.count]),
+    [["GPT-6 Astra", "Codex", 2], ["GPT-5.6 Sol", "Codex", 1], ["Codex", "Codex", 1], ["Opus 4.7", "Claude", 1]]
+  );
+  assert.equal(codexModelLabel("gpt-5-codex"), "GPT-5 Codex");
+  assert.equal(codexModelLabel("o4-mini"), "o4-mini");
 });

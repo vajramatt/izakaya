@@ -311,8 +311,11 @@ Select a repo and the right panel fills in:
   disk
 - **the hand behind the bar** — factual commit attribution: how much recent
   work carries a coding agent's `Co-authored-by` trailer (Claude, Codex,
-  Copilot, Cursor, Aider, Gemini), and which Claude models are named. Only
-  signed commits count; an agent that leaves no trailer leaves no mark
+  Copilot, Cursor, Aider, Gemini), and which models are named — Claude's
+  (`Claude Opus 4.7`) and Codex's when it signs as `Codex (gpt-6-astra)`,
+  shown as `GPT-6 Astra`. Only signed commits count; an agent that leaves no
+  trailer leaves no mark. Codex doesn't sign by default — a `SessionStart`
+  hook can hand it the trailer (its hook input carries `model`)
 - **agents at the bar** — local Claude Code and Codex sessions associated with
   this exact path, and when each last spoke (`a` starts or resumes one)
 - **word from the street** — with `gh` installed, the plate you examine

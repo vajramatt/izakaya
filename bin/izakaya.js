@@ -20,7 +20,7 @@ const execFile = promisify(execFileCb);
 // nothing when installed — in which case the line is just the bare version.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const VERSION = "0.9.0";
+const VERSION = "0.9.1";
 
 function commit() {
   try {
@@ -1002,6 +1002,19 @@ const AI_HANDS = [
   { agent: "Gemini", re: /gemini/i },
 ];
 
+// gpt-6-astra → GPT-6 Astra, gpt-5.6-sol → GPT-5.6 Sol; anything that
+// doesn't look like a gpt id is shown as written.
+function codexModelLabel(id) {
+  const m = id.match(/^gpt-([\d.]+)(?:-(.+))?$/i);
+  if (!m) return id;
+  const name = (m[2] || "")
+    .split("-")
+    .filter(Boolean)
+    .map((w) => w[0].toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+  return `GPT-${m[1]}${name ? " " + name : ""}`;
+}
+
 // Commit bodies (hash \x1f body \x1e, as enrichRepo asks git for them) → the
 // tally: how many of these pours an agent signed, and which hands/models.
 // null when no agent signed any of them.
@@ -1022,6 +1035,10 @@ function aiTally(log) {
       if (hand.agent === "Claude") {
         const m = line.match(/Claude\s+(Opus|Sonnet|Haiku|Fable)\s+([\d.]+)/i);
         if (m) label = `${m[1][0].toUpperCase()}${m[1].slice(1).toLowerCase()} ${m[2]}`;
+      } else if (hand.agent === "Codex") {
+        // `Codex (gpt-6-astra)` — the model rides in parentheses
+        const m = line.match(/Codex\s*\(([\w.-]{1,40})\)/i);
+        if (m) label = codexModelLabel(m[1]);
       }
       seen.set(label, hand.agent);
     }
@@ -3693,7 +3710,7 @@ export {
   changeMark, changePath, scrubRemote,
   expandHome, shq, isPaste, printable, chopChar, scrubText,
   applyTheme, gradColor, langMeta, closingFacts,
-  agentDefinitions, codexSessionMeta, aiTally, parseWorktrees,
+  agentDefinitions, codexSessionMeta, aiTally, codexModelLabel, parseWorktrees,
   offBranch, lastSeen, standupSince,
   THEMES, T, LANGS, G,
 };
