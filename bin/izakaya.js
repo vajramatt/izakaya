@@ -20,7 +20,7 @@ const execFile = promisify(execFileCb);
 // nothing when installed — in which case the line is just the bare version.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const VERSION = "0.9.1";
+const VERSION = "0.10.0";
 
 function commit() {
   try {
@@ -192,6 +192,8 @@ const G = {
   sake: "",
   copy: "",
   pr: "",
+  market: "🐟",
+  spin: "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏",
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -584,6 +586,10 @@ if (ARGV.includes("--help") || ARGV.includes("-h")) {
       `                workday (Monday looks back to Friday) — plain text,\n` +
       `                or --json. You are git's user.name or user.email\n` +
       `                ($IZAKAYA_AUTHOR, a git --author pattern, overrides)\n` +
+      `  --pull        the market run: fetch every plate's upstream and\n` +
+      `                fast-forward the clean ones that are behind — never\n` +
+      `                a merge, rebase, stash, or force. Plain text (or\n` +
+      `                --json); exits 1 when a remote couldn't be reached\n` +
       `  -v, --version print the version and leave\n` +
       `  -h, --help    show this and leave\n\n` +
       `Once you're in, press ? for the keys. またね.\n`
@@ -602,6 +608,10 @@ const TAKEOUT = ARGV.includes("--report")
       ? "standup"
       : null;
 const TAKEOUT_JSON = ARGV.includes("--json");
+// --pull is headless too, but it is NOT takeout: the takeout window is
+// side-effect free, and the market run is the one command that moves repos.
+const PULL = !TAKEOUT && ARGV.includes("--pull");
+const HEADLESS = !!TAKEOUT || PULL;
 
 // A path-looking word (~/…, /…, ./…, or anything with a slash) is the root;
 // a bare word rides in as a fuzzy query — `iz ramen`.
@@ -635,8 +645,9 @@ const SEAT_FILE = path.join(CACHE_DIR, "seat");
 // missing `recent`, say — would crash the first paint before the rescan could
 // heal it, so a mismatched cache is simply thrown out and rebuilt. Bump this
 // whenever a field is added to (or changed on) the repo object. (9: plates
-// are scrubbed of control characters at scan time — older caches weren't.)
-const MENU_V = 9;
+// are scrubbed of control characters at scan time — older caches weren't.
+// 10: `fetchedUnix`, when the plate last heard from its remote.)
+const MENU_V = 10;
 
 function loadMenu() {
   if (DEMO) return null;
@@ -780,6 +791,7 @@ async function scanRepo(dirent, base = ROOT, depth = 0) {
     lastUnix: 0,
     touchedUnix: 0, // newest uncommitted edit (git) or newest file (not git)
     remote: null,
+    fetchedUnix: 0, // last fetch (FETCH_HEAD's mtime) — how old ⇣ is
     files: 0,
     bytes: 0,
     langs: [],
@@ -842,6 +854,12 @@ async function scanRepo(dirent, base = ROOT, depth = 0) {
       repo.lastUnix = parseInt(ct, 10) || 0;
     }
     if (remote) repo.remote = scrubText(scrubRemote(remote));
+    // when the plate last heard from the street — a ⇣0 is only as true as
+    // its last fetch. A linked worktree (.git is a file) just goes unsaid.
+    try {
+      const st = await fs.stat(path.join(dir, ".git", "FETCH_HEAD"));
+      repo.fetchedUnix = Math.floor(st.mtimeMs / 1000);
+    } catch {}
     if (ab) {
       const [behind, ahead] = ab.split(/\s+/).map((n) => parseInt(n, 10) || 0);
       repo.behind = behind;
@@ -1127,6 +1145,169 @@ async function enrichRepo(repo) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// The market run — the one thing izakaya does that moves a repo, and only
+// ever forward. Each plate runs the same fixed recipe: check it may go,
+// fetch its upstream remote, then fast-forward only when it is behind, not
+// ahead, and has no unsettled tracked files. Anything else is set aside with
+// a plain reason. Never a merge commit, rebase, stash, reset, force, or
+// prune. Hooks are off (a repo's own hooks path can point inside the repo,
+// and browsing must never run a repo's code), submodules aren't recursed,
+// and nothing may prompt: no TTY for the child, no git credential prompt,
+// ssh in batch mode unless the user has configured their own ssh command.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MARKET_TIMEOUT = 30_000;
+
+// What may stop a plate before it leaves for market. Checked in this order,
+// first reason wins, so the same repo always gets the same answer.
+// f: { isGit, branch, upstream, remote, busy, live } → null (go) | {kind, reason}
+function marketGate(f) {
+  if (!f.isGit) return { kind: "not-git", reason: "not a git repo" };
+  if (!f.branch || f.branch === "HEAD")
+    return { kind: "detached", reason: "detached HEAD — no branch to bring up to date" };
+  if (!f.upstream)
+    return { kind: "no-upstream", reason: "no upstream — this branch never left the house" };
+  if (f.remote === ".")
+    return { kind: "local-upstream", reason: "tracks a local branch, not a remote" };
+  if (!f.remote || f.remote.startsWith("-"))
+    return { kind: "odd-remote", reason: "the upstream's remote name looks wrong — left alone" };
+  if (f.busy) return { kind: "busy", reason: `mid-${f.busy} — finish it first` };
+  if (f.live) return { kind: "cooking", reason: "an agent is cooking here — left alone" };
+  return null;
+}
+
+// After the fetch: what the plate may do with what came back.
+// f: { ahead, behind, dirty } → {act: "fresh"|"ff"} | {act: "skip", kind, reason}
+function marketMove({ ahead, behind, dirty }) {
+  if (behind === 0) return { act: "fresh" };
+  if (ahead > 0)
+    return {
+      act: "skip",
+      kind: "diverged",
+      reason: `diverged — ${G.ahead}${ahead} yours, ${G.behind}${behind} theirs`,
+    };
+  if (dirty > 0)
+    return {
+      act: "skip",
+      kind: "dirty",
+      reason: `${dirty} unsettled file${dirty === 1 ? "" : "s"} — ${G.behind}${behind} waiting`,
+    };
+  return { act: "ff" };
+}
+
+// An operation left half-done: git's own marker files, found where git
+// itself says they live (worktree-correct).
+const MARKET_BUSY = [
+  ["MERGE_HEAD", "merge"], ["rebase-merge", "rebase"], ["rebase-apply", "rebase"],
+  ["CHERRY_PICK_HEAD", "cherry-pick"], ["REVERT_HEAD", "revert"], ["BISECT_LOG", "bisect"],
+];
+async function marketBusy(dir) {
+  const out = await git(dir, "rev-parse", ...MARKET_BUSY.flatMap(([p]) => ["--git-path", p]));
+  if (!out) return null;
+  const paths = out.split("\n");
+  for (let i = 0; i < MARKET_BUSY.length; i++)
+    if (paths[i] && fsSync.existsSync(path.resolve(dir, paths[i]))) return MARKET_BUSY[i][1];
+  return null;
+}
+
+async function marketEnv(dir) {
+  const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" };
+  if (!env.GIT_SSH_COMMAND && !env.GIT_SSH && !(await git(dir, "config", "core.sshCommand")))
+    env.GIT_SSH_COMMAND = "ssh -o BatchMode=yes";
+  return env;
+}
+
+// The two commands that write. Detached means no controlling terminal, so
+// nothing downstream (ssh, a credential helper) can open /dev/tty and ask.
+async function gitMarket(cwd, env, args) {
+  try {
+    await execFile(
+      "git",
+      ["-c", `core.hooksPath=${os.devNull}`, "-c", "submodule.recurse=false", ...args],
+      { cwd, env, timeout: MARKET_TIMEOUT, detached: true }
+    );
+    return { ok: true };
+  } catch (e) {
+    const raw = String(e.stderr || "");
+    const line =
+      raw.split("\n").map((l) => l.replace(/^(fatal|error):\s*/, "").trim()).find(Boolean) ||
+      e.message;
+    return { ok: false, raw, timedOut: !!e.killed, err: scrubText(line).slice(0, 120) };
+  }
+}
+
+// One plate's trip. `live` says an agent is mid-conversation there. Returns
+// { name, dir, outcome: restocked|fresh|skipped, kind, reason, pours, ahead,
+//   fetched } — `fetched` tells the bar the plate's facts may have moved.
+async function marketRun(dir, name, live = false) {
+  const res = {
+    name, dir, outcome: "skipped", kind: null, reason: null, pours: 0, ahead: 0, fetched: false,
+  };
+  const isGit = fsSync.existsSync(path.join(dir, ".git"));
+  const [branch, upstream, busy] = isGit
+    ? await Promise.all([
+        // symbolic-ref names the branch even before its first pour, and
+        // fails only when HEAD is detached — which is exactly the question
+        git(dir, "symbolic-ref", "--quiet", "--short", "HEAD"),
+        git(dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"),
+        marketBusy(dir),
+      ])
+    : [null, null, null];
+  const remote =
+    branch && branch !== "HEAD" ? await git(dir, "config", `branch.${branch}.remote`) : null;
+  const gate = marketGate({ isGit, branch, upstream, remote, busy, live });
+  if (gate) return { ...res, ...gate };
+
+  const env = await marketEnv(dir);
+  const shown = scrubText(remote);
+  const f = await gitMarket(dir, env, ["fetch", "--quiet", "--no-recurse-submodules", remote]);
+  if (!f.ok)
+    return {
+      ...res,
+      kind: "unreachable",
+      reason: f.timedOut
+        ? `${shown} didn't answer in ${MARKET_TIMEOUT / 1000}s`
+        : `couldn't reach ${shown} — ${f.err}`,
+    };
+  res.fetched = true;
+
+  const [ab, status] = await Promise.all([
+    git(dir, "rev-list", "--left-right", "--count", "@{u}...HEAD"),
+    git(dir, "status", "--porcelain", "--untracked-files=no"),
+  ]);
+  const [behind = 0, ahead = 0] = (ab || "").split(/\s+/).map((n) => parseInt(n, 10) || 0);
+  const dirty = status ? status.split("\n").filter(Boolean).length : 0;
+  res.ahead = ahead;
+  const move = marketMove({ ahead, behind, dirty });
+  if (move.act === "fresh") return { ...res, outcome: "fresh" };
+  if (move.act === "skip") return { ...res, kind: move.kind, reason: move.reason };
+
+  const m = await gitMarket(dir, env, ["merge", "--ff-only", "--quiet", "@{u}"]);
+  if (!m.ok)
+    return {
+      ...res,
+      kind: "refused",
+      reason: /untracked working tree files would be overwritten/.test(m.raw)
+        ? "an untracked file stands where an incoming one would land"
+        : `git refused the fast-forward — ${m.err}`,
+    };
+  return { ...res, outcome: "restocked", pours: behind };
+}
+
+// A result in one line — the flash after `p`, and the headless text rows.
+function marketLine(r) {
+  if (r.outcome === "restocked")
+    return `${G.behind}${r.pours} pour${r.pours === 1 ? "" : "s"} fresh from the market — ${r.name}`;
+  if (r.outcome === "fresh")
+    return `${r.name} is already fresh` +
+      (r.ahead ? `  ·  ${G.ahead}${r.ahead} of yours still to push` : "");
+  return `${r.name} set aside · ${r.reason}`;
+}
+
+const marketTone = (r) =>
+  r.outcome !== "skipped" ? "ok" : r.kind === "unreachable" ? "err" : "warn";
+
+// ─────────────────────────────────────────────────────────────────────────────
 // State
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1140,12 +1321,13 @@ const state = {
   toScan: 0,
   sort: "recent", // recent | name | size
   status: "",
+  statusTone: "ok", // ok (teal) | warn (yellow) | err (red) — a flash's meaning
   splash: true,
   phase: 0,
   filter: "",
   filtering: false,
   dirtyOnly: false,
-  help: false,
+  help: null, // {scroll} while the back page is open
   focus: "menu", // "menu" browses the board | "board" steps behind the bar
   boardSel: 0, // which file on the open tab the cursor is standing on
   peek: null, // the pour, line by line — a file's diff drawn over the board
@@ -1157,6 +1339,7 @@ const state = {
   ambient: "", // the bar quietly lives when you've been idle a while
   stove: null, // closing time — {scroll} while the sweep is on screen
   agentPicker: null, // {repoDir, sel} — choose an agent for the exact plate
+  market: null, // {running, open, total, results, scroll} — the P market run
   colophon: false,
   leaving: false,
   saying: null,
@@ -1212,7 +1395,7 @@ let splashStart = Date.now();
 // The neon flows while the curtain is up: tick the gradient phase ~20fps.
 // (No timer when imported — a test run must be free to end — and none at
 // the takeout window, where a splash frame would land in someone's pipe.)
-const splashTimer = IS_MAIN && !TAKEOUT
+const splashTimer = IS_MAIN && !HEADLESS
   ? setInterval(() => {
       if (state.splash) {
         state.phase += 0.016;
@@ -1297,7 +1480,7 @@ function noteVisitDelta() {
   if (newDirty) bits.push(`${newDirty} newly unsettled`);
   if (gone) bits.push(`${gone} left the menu`);
   if (bits.length)
-    flash(`${G.sake} since your last visit — ${bits.join("  ·  ")}`, 6000);
+    flash(`${G.sake} since your last visit — ${bits.join("  ·  ")}`, "ok", 6000);
 }
 
 // Each scan carries a generation stamp; `w` mid-pour starts a new one, and
@@ -1688,6 +1871,78 @@ function printClosingTime(plates, asJson) {
   process.exit(at.length ? 1 : 0);
 }
 
+// --pull — the market run with no bar: every top-level git plate, four at a
+// time, the same recipe as P. Not part of the takeout window — this one
+// writes, to the repos, by design — but it prints like one. Exits 1 when a
+// remote couldn't be reached, 0 otherwise (a plate set aside for being dirty
+// or diverged is the rules working, not a failure); 2 when the root can't
+// be read.
+async function printMarket(asJson) {
+  let entries;
+  try {
+    entries = await fs.readdir(ROOT, { withFileTypes: true });
+  } catch (e) {
+    console.error(`izakaya: cannot read ${ROOT}: ${e.message}`);
+    process.exit(2);
+  }
+  const dirs = entries.filter(
+    (e) => e.isDirectory() && !e.name.startsWith(".") &&
+      fsSync.existsSync(path.join(ROOT, e.name, ".git"))
+  );
+  const results = [];
+  const queue = [...dirs];
+  await Promise.all(
+    Array.from({ length: 4 }, async () => {
+      while (queue.length) {
+        const d = queue.shift();
+        const dir = path.join(ROOT, d.name);
+        const now = Date.now() / 1000;
+        const live = (await agentSessions(dir)).some((a) => now - a.lastUnix < LIVE_S);
+        results.push(await marketRun(dir, scrubText(d.name), live));
+      }
+    })
+  );
+  results.sort((a, b) => a.name.localeCompare(b.name));
+  const unreachable = results.some((r) => r.kind === "unreachable");
+  const count = (o) => results.filter((r) => r.outcome === o).length;
+  if (asJson) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          izakaya: VERSION,
+          root: ROOT,
+          generatedAt: new Date().toISOString(),
+          plates: results.map(({ fetched, ...r }) => r),
+          restocked: count("restocked"),
+          fresh: count("fresh"),
+          skipped: count("skipped"),
+        },
+        null,
+        2
+      ) + "\n"
+    );
+    process.exit(unreachable ? 1 : 0);
+  }
+  const tty = !!process.stdout.isTTY;
+  const strip = (s) => (tty ? s : s.replace(ANSI_RE, ""));
+  const lines = [
+    BOLD + "the market run" + RESET + ` — fresh from the street (${ROOT.replace(os.homedir(), "~")})`,
+  ];
+  const nameW = Math.min(24, Math.max(4, ...results.map((r) => visW(r.name))));
+  const row = (r, c, what) =>
+    `  ${padW(truncW(r.name, nameW) + RESET, nameW)}  ${c}${what}${RESET}`;
+  for (const r of results.filter((r) => r.outcome === "restocked"))
+    lines.push(row(r, fg(T.green), `restocked  ${G.behind}${r.pours} pour${r.pours === 1 ? "" : "s"}`));
+  for (const r of results.filter((r) => r.outcome === "skipped"))
+    lines.push(row(r, fg(r.kind === "unreachable" ? T.red : T.yellow), `set aside  ${r.reason}`));
+  const fresh = count("fresh");
+  lines.push(
+    `${count("restocked")} restocked  ·  ${fresh} already fresh  ·  ${count("skipped")} set aside`
+  );
+  process.stdout.write(strip(lines.join("\n")) + "\n");
+  process.exit(unreachable ? 1 : 0);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Rendering
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1714,6 +1969,9 @@ function headerLine(W) {
   s += bg(T.seg4) + fg(T.seg3) + G.sep;
   s += bg(T.seg4) + fg(dirtyCount ? T.yellow : T.segDim) +
     ` ${dirtyCount ? `${G.dot} ${dirtyCount} dirty` : `${G.ok} all clean`} `;
+  // upstream work waiting — p/P brings it in
+  const behind = treeRepos().filter((r) => r.behind > 0).length;
+  if (behind) s += fg(T.blue) + `${G.behind} ${behind} behind `;
   // agents mid-conversation anywhere on the menu
   const cooking = treeRepos().filter((r) => agentLive(r)).length;
   if (cooking) s += fg(T.magenta) + `${G.agent} ${cooking} cooking `;
@@ -1741,7 +1999,8 @@ function footerLine(W) {
   if (state.status) {
     // a flash owns the whole line — appended after the key chips it just
     // gets truncated off the right edge at most terminal widths
-    s += fg(T.teal) + ITAL + state.status;
+    const tone = { ok: T.teal, warn: T.yellow, err: T.red }[state.statusTone] || T.teal;
+    s += fg(tone) + ITAL + state.status;
     return padW(truncW(s, W), W) + RESET;
   }
   if (state.ambient) {
@@ -1783,6 +2042,7 @@ function footerLine(W) {
         ["tab", "open tab"],
         ["/", "filter"],
         ["↵", "sit"],
+        ["p", "market"],
         ["o", "open"],
         ["t", "term"],
         ["e", "edit"],
@@ -1790,7 +2050,6 @@ function footerLine(W) {
         ["s", `sort:${state.sort}`],
         ["!", "closing time"],
         ["?", "more"],
-        ["~", "colophon"],
         ["q", "leave"],
       ];
   const chip = ([k, label]) =>
@@ -1869,10 +2128,18 @@ function listRow(repo, selected, W) {
   const age = seen ? (warm ? fg(T.yellow) : fg(T.fgDim)) + relTime(seen) : "";
   // Nested rows spend their width on the folder name and hierarchy. Their
   // full status is already on the dashboard as soon as the row is selected.
-  const marks = `${liveMark}${freshMark}${dirtyMark}${aheadMark}`;
-  const right = repo.depth && !flat
-    ? `${liveMark}${dirtyMark}`
-    : `${marks}${marks && age ? " " : ""}${age}`;
+  // the street has pours you don't — p brings them in
+  const behindMark = repo.isGit && repo.behind > 0 ? fg(T.blue) + G.behind : "";
+  const marks = `${liveMark}${freshMark}${dirtyMark}${behindMark}${aheadMark}`;
+  // at the market right now: a spinner stands in for the marks
+  const spin = marketing.has(repo.dir)
+    ? fg(T.blue) + [...G.spin][Math.floor(Date.now() / 100) % [...G.spin].length]
+    : "";
+  const right = spin
+    ? `${spin}${age && !(repo.depth && !flat) ? " " + age : ""}`
+    : repo.depth && !flat
+      ? `${liveMark}${dirtyMark}${behindMark}`
+      : `${marks}${marks && age ? " " : ""}${age}`;
   const rightW = visW(right);
   // a filter ranks matches out of tree order, so rows go flat and a nested
   // plate wears its parent's path instead of an indent
@@ -2009,9 +2276,19 @@ function detailLines(repo, W, focusIdx = -1) {
         `  ${fg(T.fgFaint)}${limb} ${fg(T.fgDim)}${relTime(rc.ct).padEnd(8)}${fg(T.fgDim)}${rc.msg}`
       );
     }
+    // the remote, and how long since the plate last asked it anything — a
+    // ⇣0 from a three-week-old fetch is a guess, so the age is part of the fact
+    const asked = repo.fetchedUnix
+      ? `  ${fg(T.fgDim)}· checked ${relTime(repo.fetchedUnix)}`
+      : `  ${fg(T.fgDim)}· never fetched`;
     pad(
       repo.remote
-        ? `  ${fg(T.fgDim)}${G.remote} ${fg(T.cyan)}${repo.remote}`
+        ? `  ${fg(T.fgDim)}${G.remote} ${fg(T.cyan)}${repo.remote}${asked}` +
+            (marketing.has(repo.dir)
+              ? `  ${fg(T.blue)}${G.market} at the market…`
+              : repo.behind
+                ? `  ${fg(T.fgFaint)}— ${fg(T.blue)}p${fg(T.fgFaint)} brings it in`
+                : "")
         : `  ${fg(T.fgDim)}${G.remote} no remote — house brew only`
     );
     // word from the street — gh's answer, when one came back
@@ -2458,55 +2735,124 @@ function agentFrame(W, H) {
 }
 
 // The back page of the menu — every key, including the ones the footer
-// doesn't have room for.
+// doesn't have room for, grouped by what they're for. Two columns when the
+// room is wide enough; when it's short, j/k scroll instead of the bottom
+// rows quietly falling off a 24-row terminal.
+const HELP = [
+  {
+    title: "getting around",
+    rows: [
+      ["j / k", "browse the menu (arrows work too)"],
+      ["→ / ←", "open subfolders / back out"],
+      ["g / G", "first / last plate"],
+      ["J / K", "scroll the plate's details"],
+      ["/", "fuzzy filter — enter keeps, esc clears"],
+      ["d", "dirty plates only"],
+      ["s", "sort: recent · name · size"],
+    ],
+  },
+  {
+    title: "behind the bar",
+    rows: [
+      ["tab", "step into the plate's open tab"],
+      ["↑ / ↓", "walk the open tab, file by file"],
+      ["enter", "peek the pour — the file's diff"],
+      ["e / y / o", "edit · copy · reveal that file"],
+    ],
+  },
+  {
+    title: "out the door",
+    rows: [
+      ["enter", "sit down — the iz() wrapper cd's you there"],
+      ["o", "open in the file manager"],
+      ["t", "terminal window at the repo"],
+      ["e", "$EDITOR at the repo"],
+      ["u", "the usual — your own session script"],
+      ["a", "choose an agent — start fresh or resume"],
+      ["c / C", "claude code here / resume it"],
+      ["b", "open the remote in the browser"],
+      ["y", "copy the repo path"],
+    ],
+  },
+  {
+    title: "the house",
+    rows: [
+      ["p", "market run — fetch, fast-forward if clean"],
+      ["P", "market run for every plate on the menu"],
+      ["r", "rescan the kitchen"],
+      ["!", "closing time — work only this machine has"],
+      ["w", "move the bar — scan a different directory"],
+      ["T", "change the lanterns"],
+      ["~", "colophon — who keeps this bar"],
+      ["q / esc", "またね"],
+    ],
+  },
+];
+
+// Split sections into n columns, in order, as evenly tall as whole sections
+// allow. A section costs its rows plus a title and a gap line.
+function helpColumns(sections, n) {
+  if (n <= 1) return [sections];
+  const cost = (s) => s.rows.length + 2;
+  const total = sections.reduce((a, s) => a + cost(s), 0);
+  let best = null;
+  for (let cut = 1; cut < sections.length; cut++) {
+    const left = sections.slice(0, cut).reduce((a, s) => a + cost(s), 0);
+    const diff = Math.abs(total - 2 * left);
+    if (!best || diff < best.diff) best = { cut, diff };
+  }
+  return best ? [sections.slice(0, best.cut), sections.slice(best.cut)] : [sections];
+}
+
 function helpFrame(W, H) {
+  const blank = bg(T.bg) + " ".repeat(W) + RESET;
+  const keyW = Math.max(...HELP.flatMap((s) => s.rows.map(([k]) => visW(k)))) + 2;
+  const descW = Math.max(...HELP.flatMap((s) => s.rows.map(([, d]) => visW(d))));
+  const colW = keyW + descW;
+  const gutter = 6;
+  const cols = helpColumns(HELP, W >= colW * 2 + gutter + 4 ? 2 : 1);
+  const colLines = cols.map((sections) => {
+    const L = [];
+    sections.forEach((sec, i) => {
+      if (i) L.push("");
+      L.push(fg(T.seg1) + BOLD + sec.title + RESET);
+      for (const [k, d] of sec.rows)
+        L.push(
+          fg(T.orange) + BOLD + padW(k, keyW) + RESET + bg(T.bg) + fg(T.fgDim) + d
+        );
+    });
+    return L;
+  });
+  const tall = Math.max(...colLines.map((c) => c.length));
+  const blockW = cols.length * colW + (cols.length - 1) * gutter;
+  const left = " ".repeat(Math.max(0, Math.floor((W - blockW) / 2)));
   const center = (s) =>
     bg(T.bg) + " ".repeat(Math.max(0, Math.floor((W - visW(s)) / 2))) + s;
-  const blank = bg(T.bg) + " ".repeat(W) + RESET;
 
-  const rows = [
-    ["j / k", "browse the menu (arrows work too)"],
-    ["→ / ←", "open subfolders / back out"],
-    ["tab", "step behind the bar into the selected repo's open tab"],
-    ["↑ / ↓", "behind the bar: walk the open tab, file by file"],
-    ["enter", "behind the bar: peek the pour — the file's diff"],
-    ["g / G", "first / last plate"],
-    ["J / K", "scroll the plate's details"],
-    ["/", "fuzzy filter — enter keeps it, esc clears it"],
-    ["d", "dirty plates only — show unfinished work"],
-    ["!", "closing time — work that exists only on this machine"],
-    ["enter", "sit down — the iz() wrapper cd's you there"],
-    ["o", "open in the file manager — or reveal the file"],
-    ["t", "terminal window at the repo"],
-    ["u", "the usual — your own session script, launched at the repo"],
-    ["e", "$EDITOR at the repo — or at the file under the cursor"],
-    ["a", "choose an agent — start fresh or resume at this exact repo"],
-    ["c", "claude code at the repo"],
-    ["C", "resume Claude there (compatibility shortcut)"],
-    ["b", "open the remote in the browser"],
-    ["y", "copy the repo path — or the file's"],
-    ["w", "move the bar — scan a different directory"],
-    ["s", "sort: recent · name · size"],
-    ["T", "change the lanterns — tokyonight · iceberg · nord · catppuccin"],
-    ["r", "rescan the kitchen"],
-    ["~", "colophon — who keeps this bar"],
-    ["q / esc", "またね"],
-  ];
-  const keyW = 8;
-  const descW = Math.max(...rows.map(([, d]) => visW(d)));
   const body = [];
   body.push(center(fg(T.seg1) + BOLD + `${G.lantern} the back page of the menu`) + RESET);
   body.push(blank);
-  for (const [k, desc] of rows)
+  for (let i = 0; i < tall; i++)
     body.push(
-      center(
-        fg(T.orange) + BOLD + padW(k, keyW) + RESET + bg(T.bg) +
-          fg(T.fgDim) + " " + padW(desc, descW)
-      ) + RESET
+      bg(T.bg) + left +
+        colLines
+          .map((c) => padW(truncW((c[i] || "") + RESET + bg(T.bg), colW), colW))
+          .join(bg(T.bg) + " ".repeat(gutter)) +
+        RESET
     );
   body.push(blank);
-  body.push(center(fg(T.fgFaint) + "( any key )") + RESET);
+  const scrolls = body.length + 1 > H;
+  const hint = center(fg(T.fgFaint) + (scrolls ? "( j/k scroll · any other key closes )" : "( any key )")) + RESET;
 
+  // taller than the room: the keys scroll, the hint keeps the bottom stool
+  if (scrolls) {
+    const room = H - 1;
+    state.help.scroll = Math.max(0, Math.min(state.help.scroll, body.length - room));
+    return [...body.slice(state.help.scroll, state.help.scroll + room), hint]
+      .map((b) => padW(b + bg(T.bg), W) + RESET);
+  }
+  body.push(hint);
+  state.help.scroll = 0;
   const top = Math.max(0, Math.floor((H - body.length) / 2));
   const lines = [];
   for (let i = 0; i < H; i++) {
@@ -2584,6 +2930,96 @@ function stoveFrame(W, H) {
       .map((b) => padW(b + bg(T.bg), W) + RESET);
   }
   state.stove.scroll = 0;
+  const top = Math.max(0, Math.floor((H - body.length) / 2));
+  const lines = [];
+  for (let i = 0; i < H; i++) {
+    const b = body[i - top];
+    lines.push(b ? padW(b + bg(T.bg), W) + RESET : blank);
+  }
+  return lines;
+}
+
+// The market run, on screen — P sends every plate on the menu to market and
+// this is the slip that comes back: what was restocked, what was set aside
+// and why, and how many were already fresh. Rows land as plates return;
+// close it any time and the run keeps going, the spinners on the menu rows
+// carrying on where this left off.
+function marketFrame(W, H) {
+  const m = state.market;
+  const center = (s) =>
+    bg(T.bg) + " ".repeat(Math.max(0, Math.floor((W - visW(s)) / 2))) + s;
+  const blank = bg(T.bg) + " ".repeat(W) + RESET;
+  const done = m.results.length;
+  const sorted = [...m.results].sort((a, b) => a.name.localeCompare(b.name));
+  const restocked = sorted.filter((r) => r.outcome === "restocked");
+  const skipped = sorted.filter((r) => r.outcome === "skipped");
+  const fresh = sorted.filter((r) => r.outcome === "fresh");
+
+  const body = [];
+  body.push(center(fg(T.seg1) + BOLD + `${G.market} the market run — fresh from the street`) + RESET);
+  body.push(blank);
+  const barW = Math.min(34, Math.max(10, W - 10));
+  const fillW = m.total ? Math.round((done / m.total) * barW) : barW;
+  body.push(
+    center(
+      fg(T.blue) + "█".repeat(fillW) + fg(T.fgFaint) + "░".repeat(barW - fillW)
+    ) + RESET
+  );
+  body.push(
+    center(
+      fg(T.teal) + ITAL +
+        (m.running ? `${done}/${m.total} back from the market…` : `all ${m.total} back`)
+    ) + RESET
+  );
+  body.push(blank);
+
+  const nameW = Math.min(24, Math.max(4, ...sorted.map((r) => visW(r.name))));
+  const row = (r, what) =>
+    fg(T.fg) + padW(truncW(r.name, nameW) + RESET + bg(T.bg), nameW) + "  " + what;
+  const rows = [
+    ...restocked.map((r) =>
+      row(r, fg(T.green) + `${G.ok} restocked  ${fg(T.blue)}${G.behind}${r.pours} ` +
+        `pour${r.pours === 1 ? "" : "s"}`)),
+    ...skipped.map((r) =>
+      row(r, fg(r.kind === "unreachable" ? T.red : T.yellow) +
+        `${G.warn} set aside  ${fg(T.fgDim)}${r.reason}`)),
+  ];
+  if (rows.length) {
+    const rowW = Math.min(W - 4, Math.max(...rows.map(visW)));
+    for (const s of rows) body.push(center(padW(truncW(s, rowW), rowW)) + RESET);
+    body.push(blank);
+  }
+  if (fresh.length) {
+    const names = fresh.map((r) => r.name);
+    const list = names.slice(0, 6).join(", ") + (names.length > 6 ? ` +${names.length - 6}` : "");
+    body.push(
+      center(truncW(fg(T.fgDim) + `${fresh.length} already fresh  ${fg(T.fgFaint)}${list}`, W - 4)) +
+        RESET
+    );
+    body.push(blank);
+  }
+  body.push(
+    center(
+      truncW(fg(T.fgFaint) + "fast-forward only when clean and behind — never a merge, rebase, or force", W - 4)
+    ) + RESET
+  );
+  body.push(blank);
+  const scrolls = body.length + 1 > H;
+  const hint = center(
+    fg(T.fgFaint) +
+      (scrolls
+        ? "( j/k scroll · any other key closes )"
+        : m.running ? "( any key — the run keeps going )" : "( any key )")
+  ) + RESET;
+
+  if (scrolls) {
+    const room = H - 1;
+    m.scroll = Math.max(0, Math.min(m.scroll, body.length - room));
+    return [...body.slice(m.scroll, m.scroll + room), hint]
+      .map((b) => padW(b + bg(T.bg), W) + RESET);
+  }
+  body.push(hint);
+  m.scroll = 0;
   const top = Math.max(0, Math.floor((H - body.length) / 2));
   const lines = [];
   for (let i = 0; i < H; i++) {
@@ -2673,6 +3109,11 @@ function render() {
 
   if (state.stove) {
     paint(stoveFrame(W, H));
+    return;
+  }
+
+  if (state.market?.open) {
+    paint(marketFrame(W, H));
     return;
   }
   const listW = Math.max(26, Math.min(38, Math.floor(W * 0.34)));
@@ -2930,6 +3371,83 @@ async function fetchGh(repo) {
   render();
 }
 
+// The market run, at the bar. `marketing` holds the plates out right now —
+// their rows spin while it's non-empty. A plate that fetched is re-poured in
+// place (both pours), so its ⇣, its history, and its "checked" age are true
+// the moment it's back; the menu cache is saved once the run lands.
+const marketing = new Set();
+let marketSpinner = null;
+
+function spinWhileMarketing() {
+  if (marketSpinner) return;
+  marketSpinner = setInterval(() => {
+    if (!marketing.size) {
+      clearInterval(marketSpinner);
+      marketSpinner = null;
+    }
+    render();
+  }, 100);
+}
+
+async function refreshPlate(dir) {
+  const was = findRepo(dir);
+  if (!was) return;
+  const plate = await scanRepo({ name: path.basename(dir) }, path.dirname(dir), was.depth || 0);
+  Object.assign(plate, await enrichRepo(plate));
+  // land on the live object — a rescan may have swapped it meanwhile
+  const live = findRepo(dir);
+  if (!live) return;
+  const keep = { children: live.children, expanded: live.expanded, gh: live.gh, fresh: live.fresh };
+  Object.assign(live, plate, keep);
+  applySort();
+}
+
+async function marketPlate(repo) {
+  marketing.add(repo.dir);
+  spinWhileMarketing();
+  render();
+  let r;
+  try {
+    r = await marketRun(repo.dir, repo.name, agentLive(repo));
+    if (r.fetched) await refreshPlate(repo.dir);
+  } finally {
+    marketing.delete(repo.dir);
+  }
+  saveMenu();
+  render();
+  return r;
+}
+
+async function marketAll(plates) {
+  const run = state.market;
+  const queue = [...plates];
+  await Promise.all(
+    Array.from({ length: 4 }, async () => {
+      while (queue.length) {
+        const repo = queue.shift();
+        const r = await marketPlate(repo);
+        run.results.push(r);
+        render();
+      }
+    })
+  );
+  run.running = false;
+  // the slip was set down mid-run: one line says how the market went
+  if (state.market === run && !run.open) {
+    state.market = null;
+    const n = (o) => run.results.filter((r) => r.outcome === o).length;
+    const lost = run.results.some((r) => r.kind === "unreachable");
+    flash(
+      `${G.market} back from the market — ${n("restocked")} restocked  ·  ` +
+        `${n("fresh")} already fresh  ·  ${n("skipped")} set aside` +
+        (n("skipped") ? "  (P shows why)" : ""),
+      lost ? "err" : n("skipped") ? "warn" : "ok",
+      6000
+    );
+  }
+  render();
+}
+
 // ↵ behind the bar: peek the pour — the focused file's diff. HEAD first so
 // staged and unstaged land in one glass, then bare / --cached for repos with
 // no HEAD yet, then the raw file when it's untracked and git has nothing to
@@ -3033,7 +3551,15 @@ function onKey(buf) {
   }
 
   if (state.help) {
-    state.help = false;
+    if (k === "j" || k === "\x1b[B") {
+      state.help.scroll++; // clamped against the room in helpFrame
+      return render();
+    }
+    if (k === "k" || k === "\x1b[A") {
+      state.help.scroll = Math.max(0, state.help.scroll - 1);
+      return render();
+    }
+    state.help = null;
     return render();
   }
 
@@ -3065,6 +3591,21 @@ function onKey(buf) {
 
   if (state.colophon) {
     state.colophon = false;
+    return render();
+  }
+
+  if (state.market?.open) {
+    if (k === "j" || k === "\x1b[B") {
+      state.market.scroll++; // clamped against the room in marketFrame
+      return render();
+    }
+    if (k === "k" || k === "\x1b[A") {
+      state.market.scroll = Math.max(0, state.market.scroll - 1);
+      return render();
+    }
+    // set the slip down; a run still out keeps going on the menu rows
+    if (state.market.running) state.market.open = false;
+    else state.market = null;
     return render();
   }
 
@@ -3205,7 +3746,7 @@ function onKey(buf) {
     return render();
   }
   if (k === "?") {
-    state.help = true;
+    state.help = { scroll: 0 };
     return render();
   }
   if (k === "~") {
@@ -3252,12 +3793,30 @@ function onKey(buf) {
     state.status = "";
     return void scanAll();
   }
+  if (k === "P") {
+    // a run already out: show its slip rather than send a second one
+    if (state.market?.running) {
+      state.market.open = true;
+      return render();
+    }
+    const plates = visible().filter((r) => r.isGit && !marketing.has(r.dir));
+    if (!plates.length) return flash(`${G.market} no git plates on the menu to send`, "warn");
+    state.market = { running: true, open: true, total: plates.length, results: [], scroll: 0 };
+    render();
+    return void marketAll(plates);
+  }
 
   const sel = visible()[state.sel];
   if (!sel) return;
   if (k === "a") {
     state.agentPicker = { repoDir: sel.dir, sel: 0 };
     return render();
+  }
+  if (k === "p") {
+    if (marketing.has(sel.dir)) return; // already out — the spinner says so
+    if (!sel.isGit) return flash(`${G.market} ${sel.name} isn't a git repo — nothing to fetch`, "warn");
+    flash(`${G.market} off to the market for ${sel.name}…`, "ok", 60_000);
+    return void marketPlate(sel).then((r) => flash(`${G.market} ${marketLine(r)}`, marketTone(r), 4000));
   }
   // behind the bar with a file under the cursor, the keys narrow their aim:
   // ↵ peeks the pour, e edits that file, y copies its path, o reveals it.
@@ -3272,11 +3831,11 @@ function onKey(buf) {
     if (focused) {
       const p = changePath(focused);
       if (DEMO || revealPath(path.join(sel.dir, p))) flash(`${G.folder} revealed ${p}`);
-      else flash(`${G.folder} no opener — install xdg-utils (xdg-open)`);
+      else flash(`${G.folder} no opener — install xdg-utils (xdg-open)`, "err");
       return;
     }
     if (DEMO || openPath(sel.dir)) flash(`${G.folder} opened ${sel.name}`);
-    else flash(`${G.folder} no opener — install xdg-utils (xdg-open)`);
+    else flash(`${G.folder} no opener — install xdg-utils (xdg-open)`, "err");
   }
   if (k === "t") openAtRepo(sel, null, `${G.term} pulled up a stool at ${sel.name}`);
   if (k === "u") {
@@ -3286,7 +3845,8 @@ function onKey(buf) {
     const usual = (process.env.IZAKAYA_USUAL || loadConfig().usual || "").trim();
     if (!usual)
       return flash(
-        `${G.term} no usual on file — set IZAKAYA_USUAL or "usual" in config (README)`
+        `${G.term} no usual on file — set IZAKAYA_USUAL or "usual" in config (README)`,
+        "warn"
       );
     openAtRepo(
       sel,
@@ -3305,7 +3865,7 @@ function onKey(buf) {
   if (k === "C") {
     // compatibility shortcut: the neutral picker is `a`, but c/C stay muscle memory
     if (!sel.agents?.some((a) => a.id === "claude"))
-      return flash(`${G.claude} no claude session at this plate — c starts one`);
+      return flash(`${G.claude} no claude session at this plate — c starts one`, "warn");
     launchAgent(sel, BUILTIN_AGENTS[0], true);
   }
   if (k === "\r" || k === "\n") {
@@ -3318,9 +3878,9 @@ function onKey(buf) {
     return leave();
   }
   if (k === "b") {
-    if (!sel.remote) return flash(`${G.remote} no remote — house brew only`);
+    if (!sel.remote) return flash(`${G.remote} no remote — house brew only`, "warn");
     if (DEMO || openUrl(`https://${sel.remote}`)) flash(`${G.remote} browsing ${sel.remote}`);
-    else flash(`${G.remote} no opener — install xdg-utils (xdg-open)`);
+    else flash(`${G.remote} no opener — install xdg-utils (xdg-open)`, "err");
   }
   if (k === "y") {
     const target = focused ? path.join(sel.dir, changePath(focused)) : sel.dir;
@@ -3337,17 +3897,17 @@ function onKey(buf) {
 function openAtRepo(sel, inner, okMsg) {
   if (DEMO || openTerminal(sel.dir, inner)) return flash(okMsg);
   if (hasBin("xdg-open")) spawnDetached("xdg-open", [sel.dir]);
-  flash(`${G.term} no terminal — set $IZAKAYA_TERMINAL or terminal in config (README); opened folder`);
+  flash(`${G.term} no terminal — set $IZAKAYA_TERMINAL or terminal in config (README); opened folder`, "err");
 }
 
 function launchAgent(repo, agent, resume = false) {
   const binary = agent.command.split(/\s+/)[0];
   if (!agent.custom && !hasBin(binary))
-    return flash(`${G.agent} ${agent.label} is not installed`);
+    return flash(`${G.agent} ${agent.label} is not installed`, "err");
   if (resume && !agent.custom && !repo.agents?.some((s) => s.id === agent.id))
-    return flash(`${G.agent} no ${agent.label} session at this plate — n starts one`);
+    return flash(`${G.agent} no ${agent.label} session at this plate — n starts one`, "warn");
   if (resume && !agent.resume)
-    return flash(`${G.agent} ${agent.label} has no resume command on file`);
+    return flash(`${G.agent} ${agent.label} has no resume command on file`, "warn");
   const command = resume ? agent.resume : agent.command;
   openAtRepo(
     repo,
@@ -3356,9 +3916,12 @@ function launchAgent(repo, agent, resume = false) {
   );
 }
 
+// tone colors the line by what it means — ok (teal), warn (yellow), err
+// (red) — so "not installed" never reads like a success.
 let flashTimer;
-function flash(msg, ms = 2000) {
+function flash(msg, tone = "ok", ms = tone === "ok" ? 2000 : 3200) {
   state.status = msg;
+  state.statusTone = tone;
   render();
   clearTimeout(flashTimer);
   flashTimer = setTimeout(() => { state.status = ""; render(); }, ms);
@@ -3381,11 +3944,12 @@ const IDLE_MS = 30_000;
 let lastInput = Date.now();
 let ambientTick = 0;
 
-if (IS_MAIN && !TAKEOUT)
+if (IS_MAIN && !HEADLESS)
   setInterval(() => {
     if (
       state.splash || state.leaving || state.asking || state.stove ||
-      state.help || state.colophon || state.filtering || state.status
+      state.help || state.colophon || state.filtering || state.status ||
+      state.market?.open
     )
       return;
     if (Date.now() - lastInput < IDLE_MS) {
@@ -3406,7 +3970,7 @@ if (IS_MAIN && !TAKEOUT)
 // talking (session-file mtimes only — nothing opened that wasn't already)
 // so the magenta marks and the header's "cooking" count stay true.
 let pulsing = false;
-if (IS_MAIN && !TAKEOUT)
+if (IS_MAIN && !HEADLESS)
   setInterval(async () => {
     if (state.scanning || state.leaving || pulsing) return;
     pulsing = true;
@@ -3636,6 +4200,15 @@ if (TAKEOUT) {
   else printClosingTime(plates, TAKEOUT_JSON);
 }
 
+// The market run, headless — same shape, but it writes (to the repos only).
+if (PULL) {
+  process.stdout.on("error", (e) => {
+    if (e.code === "EPIPE") process.exit(0);
+    throw e;
+  });
+  await printMarket(TAKEOUT_JSON);
+}
+
 // `iz ramen` — the query rides in ahead of the bar. If last visit's menu
 // knows exactly one plate that answers (or one exact name), skip the TUI
 // entirely: write the seat and let the iz() wrapper cd you there. Anything
@@ -3712,5 +4285,6 @@ export {
   applyTheme, gradColor, langMeta, closingFacts,
   agentDefinitions, codexSessionMeta, aiTally, codexModelLabel, parseWorktrees,
   offBranch, lastSeen, standupSince,
+  marketGate, marketMove, helpColumns,
   THEMES, T, LANGS, G,
 };

@@ -3,7 +3,7 @@
 izakaya was built at a macOS counter (Ghostty + Starship, AppleScript out the
 back). The renderer doesn't care, though — raw ANSI, truecolor, and Node's
 terminal handling travel fine. This is the map for opening a Linux branch and
-a Windows branch. Help is welcome; the house rules in `CLAUDE.md` still apply
+a Windows branch. Help is welcome; the house rules in `AGENTS.md` still apply
 (zero dependencies, one file, the theme is law).
 
 **Where we are:** the Linux launch keys have landed on `main` — `o`/`b`/`y`

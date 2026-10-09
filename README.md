@@ -17,12 +17,17 @@ It's built to answer the three questions a work morning starts with:
 
 - **What changed while I was gone?** The bar remembers your last visit and
   says so — new pours, plates that joined the menu, work that went unsettled.
-- **What needs me?** Dirty plates and unpushed pours are marked on the menu,
+- **What needs me?** Dirty plates, unpushed pours, and plates behind their
+  remote are marked on the menu,
   the plate you're mid-way through floats to the top, a row names the branch
   when it isn't the main line, and a magenta mark shows where an agent is
   working right now. `!` is closing time — one screen of everything that
   exists only on this machine, down to the stash you forgot and the branch
   that never got pushed.
+- **Bring me up to date.** `P` is the market run: every plate on the menu
+  fetches its upstream, and the clean ones that are only behind fast-forward.
+  Anything dirty, diverged, or mid-rebase is set aside with a plain reason —
+  never merged, rebased, stashed, or forced.
 - **Take me there.** `iz ramen` from the shell seats you in the repo before
   the bar even opens; inside, `↵` on a changed file pours its diff, and one
   key opens the terminal, editor, or whichever coding agent you work with.
@@ -32,7 +37,8 @@ committed across every repo since the last workday.
 
 The header is styled after the Starship TokyoNight prompt, so it looks like
 the rest of the terminal it lives in. One file, no packages, no build step,
-and read-only by design — it never writes to the repos it serves.
+and read-only by design — the one exception is the market run, which only
+ever fetches and fast-forwards ([the rules](#the-market-run--bring-it-up-to-date)).
 
 **Pull up a stool → [izakaya.guru](https://izakaya.guru)**
 
@@ -165,6 +171,8 @@ which directories count as projects.
 | `J` / `K` | scroll the selected plate's details |
 | `/` | fuzzy filter the menu — `izk` finds izakaya (enter keeps, esc clears) |
 | `d` | dirty plates only — just the repos with unfinished work |
+| `p` | the market run for this plate — fetch its upstream, fast-forward if clean and behind ([rules](#the-market-run--bring-it-up-to-date)) |
+| `P` | the market run for every plate on the menu (a filter narrows it) — results on one screen |
 | `!` | closing time — every plate carrying work only this machine holds: dirty files, stashes, commits on any branch no remote has, repos that never left the house |
 | `s` | cycle sort: recent → name → size |
 | `T` | change the lanterns — cycle the theme: tokyonight → iceberg → nord → catppuccin-mocha (remembered) |
@@ -320,7 +328,9 @@ Select a repo and the right panel fills in:
   this exact path, and when each last spoke (`a` starts or resumes one)
 - **word from the street** — with `gh` installed, the plate you examine
   shows its open PRs and latest checks
-- stack chips (frameworks and tooling it spotted), the remote, whether
+- the remote and **when it was last checked** (the last fetch) — a `⇣0` is
+  only as true as its last fetch, so the age is part of the fact
+- stack chips (frameworks and tooling it spotted), whether
   `AGENTS.md` or `CLAUDE.md` is posted, and the README's opening line in quotes
 
 Repos without git are still served, marked as off-menu items.
@@ -456,10 +466,57 @@ machine. Set `IZAKAYA_AUTHOR` (any `git log --author` pattern) to override.
 Text output is colored on a TTY and plain in a pipe. Root resolution
 matches the bar: argument > `$IZAKAYA_ROOT` > saved config > `~/code`.
 
-## Read-only, by design
+(`--pull` is headless too, but it isn't takeout — it writes to your repos,
+by design. See [the market run](#the-market-run--bring-it-up-to-date).)
 
-izakaya never writes to the repos it scans. The only files it touches are
-its own:
+## The market run — bring it up to date
+
+At an izakaya the chef goes to the market at dawn for fresh stock. Here, `p`
+sends the plate under the cursor and `P` sends every git plate on the menu
+(four at a time; a filter narrows the trip), and `izakaya --pull` does the
+same from a script or cron. It is the only thing izakaya does that changes a
+repo, and it is deliberately boring — the same repo state always gets the
+same result:
+
+1. **May it go?** A plate is set aside, untouched, when it is on a detached
+   HEAD, its branch has no upstream (or tracks a local branch), it is
+   mid-merge, rebase, cherry-pick, revert, or bisect, or an agent is cooking
+   in it right now.
+2. **Fetch** the upstream's remote. Fetching never touches your files.
+3. **Fast-forward** the current branch — and only when it is behind, not
+   ahead, and has no unsettled tracked files. Untracked files are fine; if
+   one stands where an incoming file would land, git refuses and the plate
+   is set aside.
+
+Never a merge commit, rebase, stash, reset, force, or prune; never another
+branch; never submodules. Git hooks are switched off for these two
+commands (a repo's hooks path can point inside the repo, and browsing must
+never run a repo's code) — so a `post-merge` hook that runs `npm install`
+won't fire. Nothing can prompt: a remote that wants a password or an
+unknown host key is set aside with the reason instead of hanging the bar
+(git credential helpers and ssh agents still work). Each git call gets 30
+seconds.
+
+The results come back as one screen — **restocked** (how many pours came
+in), **set aside** (and why: `2 unsettled files — ⇣3 waiting`, `diverged —
+⇡1 yours, ⇣3 theirs`, `origin didn't answer`), and how many were **already
+fresh**. Close it mid-run and the run carries on; the menu rows spin until
+each plate is back.
+
+```sh
+izakaya --pull [root]          # plain text
+izakaya --pull --json          # structured: outcome, kind, reason per plate
+```
+
+`--pull` covers every top-level git plate. It exits `1` when a remote
+couldn't be reached and `0` otherwise — a plate set aside for being dirty or
+diverged is the rules working, not a failure — and `2` when the root can't
+be read.
+
+## Read-only, by design — except the market run
+
+Outside the market run, izakaya never writes to the repos it scans. The only
+files it touches are its own:
 
 - `~/.config/izakaya/config.json` — where your work lives, your `theme`,
   optional agent launchers, your optional `usual` session script, and (on Linux) an optional
@@ -473,7 +530,8 @@ its own:
 Everything else — Finder, terminal windows, the editor, coding agents, the
 browser, the clipboard — is a launch, not a mutation.
 
-It's also safe to browse a stranger's clone. Commit messages, author names,
+It's also safe to browse a stranger's clone — and to send it to market,
+since the market run never runs its hooks. Commit messages, author names,
 README lines, and folder names are someone else's text, and raw they could
 carry terminal escape sequences (retitle your window, write your clipboard).
 Every control character is stripped before anything reaches the screen or

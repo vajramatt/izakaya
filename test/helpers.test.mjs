@@ -2,7 +2,7 @@
 // that keeps the panes square, the fuzzy matcher, the scrubbers, and the
 // input-chunk logic that once recursed itself off a cliff. Zero dependencies
 // here too — node:test ships with node. The real-terminal checklist in
-// CLAUDE.md still covers everything these can't: rendering, keys, resize.
+// AGENTS.md still covers everything these can't: rendering, keys, resize.
 //
 //   node --test test/
 //
