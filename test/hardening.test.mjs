@@ -12,7 +12,7 @@ import path from "node:path";
 
 import {
   hardenedGitArgs, gitPins, DIFF_SAFE, editorArg, shq,
-  macBundleLike,
+  macBundleLike, scrubText,
 } from "../bin/izakaya.js";
 
 // ── git: a plate's config never gets to name a program ──────────────────────
@@ -98,4 +98,15 @@ test("macBundleLike: .app and friends, or anything carrying Info.plist", () => {
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+// ── C1: the 8-bit controls are controls too ─────────────────────────────────
+
+test("scrubText: every C1 control (U+0080–U+009F) comes off, U+00A0 stays", () => {
+  let c1 = "";
+  for (let cp = 0x80; cp <= 0x9f; cp++) c1 += String.fromCodePoint(cp);
+  assert.equal(scrubText(`a${c1}b`), "ab");
+  assert.equal(scrubText("main\u009b31m"), "main31m"); // a lone CSI in a branch name
+  assert.equal(scrubText("+\u009d0;title\u009c line"), "+0;title line"); // OSC … ST in a diff
+  assert.equal(scrubText("nbsp\u00a0é"), "nbsp\u00a0é");
 });

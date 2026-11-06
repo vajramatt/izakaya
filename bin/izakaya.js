@@ -648,8 +648,9 @@ const SEAT_FILE = path.join(CACHE_DIR, "seat");
 // heal it, so a mismatched cache is simply thrown out and rebuilt. Bump this
 // whenever a field is added to (or changed on) the repo object. (9: plates
 // are scrubbed of control characters at scan time — older caches weren't.
-// 10: `fetchedUnix`, when the plate last heard from its remote.)
-const MENU_V = 10;
+// 10: `fetchedUnix`, when the plate last heard from its remote. 11: branch
+// and default branch are scrubbed too.)
+const MENU_V = 11;
 
 function loadMenu() {
   if (DEMO) return null;
@@ -907,8 +908,9 @@ async function scanRepo(dirent, base = ROOT, depth = 0) {
       git(dir, "rev-list", "--left-right", "--count", "@{u}...HEAD"),
       git(dir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"),
     ]);
-    repo.branch = branch || "—";
-    if (originHead) repo.defaultBranch = originHead.replace(/^origin\//, "");
+    // ref names can't carry C0 controls, but UTF-8 C1 (U+0080–U+009F) passes
+    repo.branch = scrubText(branch) || "—";
+    if (originHead) repo.defaultBranch = scrubText(originHead.replace(/^origin\//, ""));
     repo.dirty = status ? status.split("\n").filter(Boolean).length : 0;
     // keep the porcelain itself — the open tab lists what's still unsettled.
     // XY: index status, worktree status, then a space, then the path. Capped
@@ -2430,14 +2432,14 @@ function detailLines(repo, W, focusIdx = -1) {
           pad(
             padW(
               bg(T.bgHi) + fg(T.orange) + "▌ " + fg(m.color) + m.glyph + " " +
-                fg(T.orange) + BOLD + truncW(p, W - 18) + RESET + bg(T.bgHi) +
+                fg(T.orange) + BOLD + truncW(scrubText(p), W - 18) + RESET + bg(T.bgHi) +
                 fg(T.fgDim) + "  " + suffix,
               W
             )
           );
         } else {
           pad(
-            `  ${fg(m.color)}${m.glyph} ${fg(T.fg)}${truncW(p, W - 18)}` +
+            `  ${fg(m.color)}${m.glyph} ${fg(T.fg)}${truncW(scrubText(p), W - 18)}` +
               `${fg(T.fgFaint)}  ${suffix}`
           );
         }
@@ -2598,7 +2600,7 @@ function peekPane(peek, W) {
     "  " + fg(T.seg0) + "░▒▓" +
     bg(T.seg0) + fg(T.segInk) + ` ${G.file} ` +
     bg(T.seg1) + fg(T.seg0) + G.sep +
-    bg(T.seg1) + fg(T.segFg) + BOLD + ` ${truncW(peek.file, W - 24)} ` + RESET +
+    bg(T.seg1) + fg(T.segFg) + BOLD + ` ${truncW(scrubText(peek.file), W - 24)} ` + RESET +
     bg(T.seg2) + fg(T.seg1) + G.sep +
     bg(T.seg2) + fg(T.segDim) + ` the pour ` +
     RESET + fg(T.seg2) + G.sep + RESET
@@ -2613,9 +2615,10 @@ function peekPane(peek, W) {
     return L;
   }
   for (const raw of peek.lines) {
-    // tabs would slip past the width math; control chars would talk to the
-    // terminal directly — neither gets served
-    const line = raw.replaceAll("\t", "    ").replace(/[\x00-\x1f\x7f]/g, "");
+    // tabs would slip past the width math; control chars — C0, DEL, and the
+    // 8-bit C1 set (a lone U+009B is a CSI) — would talk to the terminal
+    // directly. Neither gets served.
+    const line = scrubText(raw.replaceAll("\t", "    "));
     let c = fg(T.fg);
     if (line.startsWith("+++") || line.startsWith("---")) c = fg(T.fgDim);
     else if (line.startsWith("@@")) c = fg(T.cyan);
@@ -4014,7 +4017,7 @@ function launchAgent(repo, agent, resume = false) {
 // (red) — so "not installed" never reads like a success.
 let flashTimer;
 function flash(msg, tone = "ok", ms = tone === "ok" ? 2000 : 3200) {
-  state.status = msg;
+  state.status = scrubText(msg); // file names and paths ride in here raw
   state.statusTone = tone;
   render();
   clearTimeout(flashTimer);
