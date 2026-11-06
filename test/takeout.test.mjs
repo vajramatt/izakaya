@@ -173,6 +173,44 @@ test("--report: a hostile repo's escapes never reach the plate", async () => {
   }
 });
 
+test("--report: a plate's own .git/config runs nothing, and C1 stays off the plate", async () => {
+  const shady = await fs.mkdtemp(path.join(os.tmpdir(), "izakaya-planted-"));
+  try {
+    const repo = path.join(shady, "planted");
+    const marker = path.join(shady, "PWNED");
+    const pwn = path.join(shady, "pwn.sh");
+    await fs.writeFile(pwn, `#!/bin/sh\necho "$*" >> '${marker}'\ncat\n`, { mode: 0o755 });
+    await fs.mkdir(repo);
+    await git(repo, "init", "-q", "-b", "main\u009b31m");
+    await fs.writeFile(path.join(repo, ".gitattributes"), "*.txt filter=evil diff=evil\n");
+    await fs.writeFile(path.join(repo, "a.txt"), "a\n");
+    await git(repo, "add", "-A");
+    await git(repo, "commit", "-qm", "init");
+    // what a zip of someone else's repo can carry: an fsmonitor, a clean
+    // filter its .gitattributes points at, a textconv, an external diff, a hook
+    for (const [k, v] of [
+      ["core.fsmonitor", `${pwn} fsmonitor`],
+      ["filter.evil.clean", `${pwn} clean`],
+      ["diff.evil.textconv", `${pwn} textconv`],
+      ["diff.external", `${pwn} external`],
+    ]) await git(repo, "config", k, v);
+    await fs.mkdir(path.join(repo, ".git", "hooks"), { recursive: true });
+    await fs.writeFile(path.join(repo, ".git", "hooks", "post-index-change"), `#!/bin/sh\n${pwn} hook\n`, { mode: 0o755 });
+    // stat-dirty so status has to re-hash (and would run the clean filter)
+    await fs.writeFile(path.join(repo, "a.txt"), "b\n");
+    const indexBefore = (await fs.stat(path.join(repo, ".git", "index"))).mtimeMs;
+    const { code, stdout } = await order(shady, "--report");
+    assert.equal(code, 0);
+    await assert.rejects(fs.readFile(marker, "utf8"), "nothing from the plate's config ran");
+    assert.equal((await fs.stat(path.join(repo, ".git", "index"))).mtimeMs, indexBefore, "index untouched");
+    const [plate] = JSON.parse(stdout).plates;
+    assert.equal(plate.dirty, 1);
+    assert.equal(plate.branch, "main31m");
+  } finally {
+    await fs.rm(shady, { recursive: true, force: true });
+  }
+});
+
 test("--report: uncommitted work carries a touch time and floats up", async () => {
   const { stdout } = await order("--report", bar);
   const { plates } = JSON.parse(stdout);
