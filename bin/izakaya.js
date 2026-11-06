@@ -3951,7 +3951,7 @@ function onKey(buf) {
   if (k === "e") {
     if (focused) {
       const p = changePath(focused);
-      return openAtRepo(sel, "exec ${EDITOR:-vim} " + shq(p), `${G.edit} editing ${p}`);
+      return openAtRepo(sel, "exec ${EDITOR:-vim} " + shq(editorArg(p)), `${G.edit} editing ${p}`);
     }
     openAtRepo(sel, "exec ${EDITOR:-vim} .", `${G.edit} editing ${sel.name}`);
   }
@@ -4105,6 +4105,11 @@ function hasBin(name) {
 // Shell-quote one argument — POSIX single-quote escaping, so a filename with
 // spaces or quotes survives the trip through `$SHELL -lc`.
 const shq = (s) => `'${s.replaceAll("'", `'\\''`)}'`;
+
+// A repo-relative path handed to $EDITOR. A filename is the repo's to pick,
+// and one that starts with `+` or `-` (`+!sh -c …`, say) would be read as an
+// editor option — vim runs `+cmd` — so it always goes out as ./path.
+const editorArg = (p) => (p.startsWith("/") || p.startsWith("./") ? p : "./" + p);
 
 // One detached launch. The error handler matters on Linux: spawning a missing
 // binary fires an async 'error' event that would otherwise crash the bar.
@@ -4375,7 +4380,7 @@ export {
   charW, visW, truncW, padW,
   fuzzyScore, relTime, fmtBytes,
   changeMark, changePath, scrubRemote,
-  expandHome, shq, isPaste, printable, chopChar, scrubText,
+  expandHome, shq, editorArg, isPaste, printable, chopChar, scrubText,
   applyTheme, gradColor, langMeta, closingFacts,
   agentDefinitions, codexSessionMeta, aiTally, codexModelLabel, parseWorktrees,
   offBranch, lastSeen, standupSince,

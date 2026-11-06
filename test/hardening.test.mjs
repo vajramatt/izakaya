@@ -8,7 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 
-import { hardenedGitArgs, gitPins, DIFF_SAFE } from "../bin/izakaya.js";
+import { hardenedGitArgs, gitPins, DIFF_SAFE, editorArg, shq } from "../bin/izakaya.js";
 
 // ── git: a plate's config never gets to name a program ──────────────────────
 
@@ -60,4 +60,15 @@ test("gitPins: nothing planted, nothing pinned; an unpinnable key fails closed",
   assert.deepEqual(gitPins(null).pins, []);
   // `-c` splits at the first `=` — a subsection carrying one can't be pinned
   assert.equal(gitPins("local\0credential.https://x?a=b.helper\n!evil\0"), null);
+});
+
+// ── e: a file name is never an editor option ────────────────────────────────
+
+test("editorArg: repo-relative paths go out as ./path, once", () => {
+  assert.equal(editorArg("+!sh -c pwn"), "./+!sh -c pwn");
+  assert.equal(editorArg("-c"), "./-c");
+  assert.equal(editorArg("src/app.js"), "./src/app.js");
+  assert.equal(editorArg("./already.js"), "./already.js");
+  assert.equal(editorArg("/abs/file"), "/abs/file");
+  assert.equal(shq(editorArg("+!sh")), "'./+!sh'");
 });
