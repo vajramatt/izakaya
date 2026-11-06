@@ -7,8 +7,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
+import fs from "node:fs";
+import path from "node:path";
 
-import { hardenedGitArgs, gitPins, DIFF_SAFE, editorArg, shq } from "../bin/izakaya.js";
+import {
+  hardenedGitArgs, gitPins, DIFF_SAFE, editorArg, shq,
+  macBundleLike,
+} from "../bin/izakaya.js";
 
 // ── git: a plate's config never gets to name a program ──────────────────────
 
@@ -71,4 +76,26 @@ test("editorArg: repo-relative paths go out as ./path, once", () => {
   assert.equal(editorArg("./already.js"), "./already.js");
   assert.equal(editorArg("/abs/file"), "/abs/file");
   assert.equal(shq(editorArg("+!sh")), "'./+!sh'");
+});
+
+// ── o: a bundle-shaped plate is revealed, never launched ────────────────────
+
+test("macBundleLike: .app and friends, or anything carrying Info.plist", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "izakaya-bundle-"));
+  try {
+    for (const name of ["Calc.app", "Shout.APP", "Pane.prefPane", "Flow.workflow"]) {
+      fs.mkdirSync(path.join(tmp, name));
+      assert.equal(macBundleLike(path.join(tmp, name)), true, name);
+    }
+    const sneaky = path.join(tmp, "plain-name");
+    fs.mkdirSync(path.join(sneaky, "Contents"), { recursive: true });
+    fs.writeFileSync(path.join(sneaky, "Contents", "Info.plist"), "<plist/>");
+    assert.equal(macBundleLike(sneaky), true);
+    const repo = path.join(tmp, "infocard.ai");
+    fs.mkdirSync(repo);
+    assert.equal(macBundleLike(repo), false);
+    assert.equal(macBundleLike(path.join(tmp, "missing")), false);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });

@@ -4121,9 +4121,29 @@ function spawnDetached(bin, args, cwd) {
   child.unref();
 }
 
+// A folder macOS reads as a bundle (Foo.app, a .prefPane, a .workflow …) is
+// a program to `open`, not a place: `open Foo.app` launches it. A plate's
+// folder is named by whoever made it, so anything bundle-shaped — by its
+// extension, or by carrying Contents/Info.plist — is revealed in Finder
+// (`open -R`) instead of opened.
+const MAC_BUNDLE_EXTS = new Set([
+  ".app", ".appex", ".action", ".bundle", ".component", ".driver", ".framework",
+  ".kext", ".mdimporter", ".mpkg", ".osax", ".pkg", ".plugin", ".prefpane",
+  ".qlgenerator", ".saver", ".service", ".systemextension", ".vst", ".vst3",
+  ".wdgt", ".workflow", ".xpc",
+]);
+function macBundleLike(dir) {
+  if (MAC_BUNDLE_EXTS.has(path.extname(dir).toLowerCase())) return true;
+  try {
+    return fsSync.statSync(path.join(dir, "Contents", "Info.plist")).isFile();
+  } catch {
+    return false;
+  }
+}
+
 // o — reveal the repo in the file manager. Returns false if there's no opener.
 function openPath(dir) {
-  if (isMac) { spawnDetached("open", [dir]); return true; }
+  if (isMac) { spawnDetached("open", macBundleLike(dir) ? ["-R", dir] : [dir]); return true; }
   // TODO(linux): verify xdg-open lands the repo in the user's file manager.
   if (hasBin("xdg-open")) { spawnDetached("xdg-open", [dir]); return true; }
   return false;
@@ -4385,6 +4405,6 @@ export {
   agentDefinitions, codexSessionMeta, aiTally, codexModelLabel, parseWorktrees,
   offBranch, lastSeen, standupSince,
   marketGate, marketMove, helpColumns,
-  hardenedGitArgs, gitPins, DIFF_SAFE,
+  hardenedGitArgs, gitPins, DIFF_SAFE, macBundleLike,
   THEMES, T, LANGS, G,
 };
