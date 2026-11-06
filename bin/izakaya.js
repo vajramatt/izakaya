@@ -25,7 +25,7 @@ const VERSION = "0.10.0";
 function commit() {
   try {
     const here = path.dirname(fileURLToPath(import.meta.url));
-    const sha = execFileSync("git", ["-C", here, "rev-parse", "--short", "HEAD"], {
+    const sha = execFileSync("git", hardenedGitArgs(["-C", here, "rev-parse", "--short", "HEAD"]), {
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 2000,
     })
@@ -34,7 +34,9 @@ function commit() {
     if (!sha) return null;
     try {
       // against HEAD, so staged-but-uncommitted work still reads as dirty
-      execFileSync("git", ["-C", here, "diff", "--quiet", "HEAD"], { stdio: "ignore" });
+      // (DIFF_SAFE spelled out — `--version` runs before that const exists)
+      const quiet = ["-C", here, "diff", "--no-ext-diff", "--no-textconv", "--quiet", "HEAD"];
+      execFileSync("git", hardenedGitArgs(quiet), { stdio: "ignore" });
     } catch {
       return `${sha}-dirty`;
     }
@@ -677,9 +679,87 @@ function saveMenu() {
   } catch {}
 }
 
+// A plate's own .git/config is someone else's code. A repo that arrives as a
+// zip, a tarball, or a synced folder brings its config with it, and plain
+// read-only asks will run what it names: `status` fires core.fsmonitor, the
+// hooks dir, and any clean filter its .gitattributes points at; `diff` fires
+// diff.external and textconv drivers. So every git call goes out hardened:
+// the fixed keys are pinned off up front, and the keys a repo gets to name
+// for itself (filter drivers, credential helpers, askpass, proxies, upload-
+// pack) are pinned per plate by repoPins below. `--no-optional-locks` keeps
+// status from rewriting .git/index. (An empty diff.external doesn't disarm
+// it — git tries to run "" — so diffs carry --no-ext-diff instead.)
+function hardenedGitArgs(args, pins = []) {
+  return [
+    "--no-optional-locks",
+    "-c", "core.fsmonitor=false",
+    "-c", `core.hooksPath=${os.devNull}`,
+    "-c", "core.pager=cat",
+    ...pins,
+    ...args,
+  ];
+}
+const DIFF_SAFE = ["--no-ext-diff", "--no-textconv"];
+
+// The config keys that name a program to run. Asked once per plate with
+// their scopes; whatever the plate's own config (local, worktree — includes
+// it pulls in count as local) says about them is reset and re-pinned to the
+// user's own values from every other scope (system, global, command).
+const GIT_EXEC_KEYS =
+  "^(filter\\..*\\.(clean|smudge|process|required)|credential\\..*helper" +
+  "|core\\.(askpass|gitproxy|sshcommand)|remote\\..*\\.uploadpack)$";
+
+// `git config --show-scope -z --get-regexp` output → { pins, trusted }.
+// `-c key=` first resets a list-valued key (credential.helper) and blanks a
+// single one; the user's own values then follow in order, so the last word
+// is theirs. A key git's `-c` couldn't carry unambiguously (an `=` in a
+// subsection) can't be pinned at all — null, and the call doesn't go out.
+function gitPins(raw) {
+  const trusted = new Map();
+  const planted = new Set();
+  const parts = (raw || "").split("\0");
+  for (let i = 0; i + 1 < parts.length; i += 2) {
+    const scope = parts[i];
+    const entry = parts[i + 1];
+    const nl = entry.indexOf("\n");
+    const key = nl < 0 ? entry : entry.slice(0, nl);
+    const value = nl < 0 ? "true" : entry.slice(nl + 1);
+    if (!key) continue;
+    if (scope === "local" || scope === "worktree") planted.add(key);
+    else trusted.set(key, [...(trusted.get(key) || []), value]);
+  }
+  const pins = [];
+  for (const key of planted) {
+    if (key.includes("=")) return null;
+    pins.push("-c", `${key}=`);
+    for (const v of trusted.get(key) || []) pins.push("-c", `${key}=${v}`);
+  }
+  return { pins, trusted };
+}
+
+// Per plate, briefly cached — one scan fans out a dozen git asks at once.
+const PIN_TTL = 30_000;
+const pinCache = new Map();
+function repoPins(cwd) {
+  const hit = pinCache.get(cwd);
+  if (hit && Date.now() - hit.at < PIN_TTL) return hit.p;
+  const p = execFile(
+    "git",
+    hardenedGitArgs(["config", "--show-scope", "--includes", "-z", "--get-regexp", GIT_EXEC_KEYS]),
+    { cwd, timeout: 5000 }
+  ).then(
+    ({ stdout }) => gitPins(stdout),
+    (e) => (e.code === 1 ? gitPins("") : null) // 1 is "no such keys"; anything else fails closed
+  );
+  pinCache.set(cwd, { at: Date.now(), p });
+  return p;
+}
+
 async function git(cwd, ...args) {
   try {
-    const { stdout } = await execFile("git", args, { cwd, timeout: 5000 });
+    const cfg = await repoPins(cwd);
+    if (!cfg) return null;
+    const { stdout } = await execFile("git", hardenedGitArgs(args, cfg.pins), { cwd, timeout: 5000 });
     // trailing only — `status --porcelain` carries a leading status column
     // (e.g. " M file" for an unstaged change) that a full trim() would eat
     return stdout.replace(/\s+$/, "");
@@ -1210,20 +1290,34 @@ async function marketBusy(dir) {
   return null;
 }
 
+// "Unless the user configured their own ssh command" means *the user's* —
+// system, global, or command scope. A plate's own core.sshCommand is the
+// plate's code, so it's never consulted: the env var outranks every config
+// scope, and it's always set here to the user's command or to BatchMode.
 async function marketEnv(dir) {
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" };
-  if (!env.GIT_SSH_COMMAND && !env.GIT_SSH && !(await git(dir, "config", "core.sshCommand")))
-    env.GIT_SSH_COMMAND = "ssh -o BatchMode=yes";
+  if (!env.GIT_SSH_COMMAND && !env.GIT_SSH) {
+    const own = (await repoPins(dir))?.trusted.get("core.sshcommand")?.at(-1);
+    env.GIT_SSH_COMMAND = own || "ssh -o BatchMode=yes";
+  }
   return env;
 }
 
 // The two commands that write. Detached means no controlling terminal, so
 // nothing downstream (ssh, a credential helper) can open /dev/tty and ask.
+// Same hardening as every other git call (hooks off among it), plus no
+// submodules and no ext:: transport — a plate can't turn its remote into a
+// shell command by re-allowing it.
 async function gitMarket(cwd, env, args) {
   try {
+    const cfg = await repoPins(cwd);
+    if (!cfg) return { ok: false, raw: "", timedOut: false, err: "its git config couldn't be read" };
     await execFile(
       "git",
-      ["-c", `core.hooksPath=${os.devNull}`, "-c", "submodule.recurse=false", ...args],
+      hardenedGitArgs(
+        ["-c", "submodule.recurse=false", "-c", "protocol.ext.allow=never", ...args],
+        cfg.pins
+      ),
       { cwd, env, timeout: MARKET_TIMEOUT, detached: true }
     );
     return { ok: true };
@@ -3467,9 +3561,9 @@ async function openPeek(repo, ch) {
       : [];
     return render();
   }
-  let text = await git(repo.dir, "diff", "HEAD", "--", p);
-  if (!text) text = await git(repo.dir, "diff", "--", p);
-  if (!text) text = await git(repo.dir, "diff", "--cached", "--", p);
+  let text = await git(repo.dir, "diff", ...DIFF_SAFE, "HEAD", "--", p);
+  if (!text) text = await git(repo.dir, "diff", ...DIFF_SAFE, "--", p);
+  if (!text) text = await git(repo.dir, "diff", ...DIFF_SAFE, "--cached", "--", p);
   if (!text) {
     try {
       const raw = await fs.readFile(path.join(repo.dir, p), "utf8");
@@ -4286,5 +4380,6 @@ export {
   agentDefinitions, codexSessionMeta, aiTally, codexModelLabel, parseWorktrees,
   offBranch, lastSeen, standupSince,
   marketGate, marketMove, helpColumns,
+  hardenedGitArgs, gitPins, DIFF_SAFE,
   THEMES, T, LANGS, G,
 };
