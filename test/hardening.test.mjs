@@ -5,6 +5,7 @@
 //   node --test test/
 
 import { test } from "node:test";
+import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
 import os from "node:os";
 import fs from "node:fs";
@@ -12,7 +13,7 @@ import path from "node:path";
 
 import {
   hardenedGitArgs, gitPins, DIFF_SAFE, editorArg, shq,
-  macBundleLike, scrubText,
+  macBundleLike, scrubText, readPlainFile, writePrivate,
 } from "../bin/izakaya.js";
 
 // ── git: a plate's config never gets to name a program ──────────────────────
@@ -109,4 +110,50 @@ test("scrubText: every C1 control (U+0080–U+009F) comes off, U+00A0 stays", ()
   assert.equal(scrubText("main\u009b31m"), "main31m"); // a lone CSI in a branch name
   assert.equal(scrubText("+\u009d0;title\u009c line"), "+0;title line"); // OSC … ST in a diff
   assert.equal(scrubText("nbsp\u00a0é"), "nbsp\u00a0é");
+});
+
+// ── a plate's files: plain ones only, and never the whole of a big one ──────
+
+test("readPlainFile: refuses a symlink and a FIFO, caps a big file", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "izakaya-read-"));
+  try {
+    const secret = path.join(tmp, "id_ed25519");
+    fs.writeFileSync(secret, "-----BEGIN OPENSSH PRIVATE KEY-----\n");
+    const readme = path.join(tmp, "README.md");
+    fs.symlinkSync(secret, readme);
+    await assert.rejects(readPlainFile(readme));
+    const zero = path.join(tmp, "package.json");
+    fs.symlinkSync("/dev/zero", zero);
+    await assert.rejects(readPlainFile(zero));
+    if (process.platform !== "win32") {
+      const fifo = path.join(tmp, "README");
+      execFileSync("mkfifo", [fifo]);
+      await assert.rejects(readPlainFile(fifo)); // and doesn't hang waiting for a writer
+    }
+    const big = path.join(tmp, "big.md");
+    fs.writeFileSync(big, "x".repeat(200 * 1024));
+    assert.equal((await readPlainFile(big)).length, 64 * 1024);
+    assert.equal((await readPlainFile(big, 10)).length, 10);
+    const plain = path.join(tmp, "plain.md");
+    fs.writeFileSync(plain, "居酒屋\n");
+    assert.equal(await readPlainFile(plain), "居酒屋\n");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("writePrivate: 0600 file in a 0700 dir, and an existing file is tightened", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "izakaya-write-"));
+  try {
+    const file = path.join(tmp, "izakaya", "menu.json");
+    writePrivate(file, "{}");
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700);
+    fs.chmodSync(file, 0o644);
+    writePrivate(file, "{}");
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    assert.equal(fs.readFileSync(file, "utf8"), "{}");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });

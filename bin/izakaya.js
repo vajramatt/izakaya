@@ -286,6 +286,15 @@ const CACHE_DIR = path.join(
 // "gold coins to a cat" three nights in a row. The cursor lives in the cache.
 const SAYING_DECK = path.join(CACHE_DIR, "sayings.json");
 
+// The housekeeping files say where you work and what you've been pouring —
+// they're yours alone: 0600 files in 0700 dirs (an existing file is
+// tightened too; mkdir's mode only lands on dirs it creates).
+function writePrivate(file, data) {
+  fsSync.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  fsSync.writeFileSync(file, data, { mode: 0o600 });
+  fsSync.chmodSync(file, 0o600);
+}
+
 function pickSaying() {
   let deck = null;
   try {
@@ -307,8 +316,7 @@ function pickSaying() {
   }
   const idx = deck.order[deck.next++];
   try {
-    fsSync.mkdirSync(path.dirname(SAYING_DECK), { recursive: true });
-    fsSync.writeFileSync(SAYING_DECK, JSON.stringify(deck));
+    writePrivate(SAYING_DECK, JSON.stringify(deck));
   } catch {}
   return SAYINGS[idx];
 }
@@ -469,8 +477,7 @@ function loadConfig() {
 function saveConfig(patch) {
   try {
     const cfg = { ...loadConfig(), ...patch };
-    fsSync.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
-    fsSync.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + "\n");
+    writePrivate(CONFIG_FILE, JSON.stringify(cfg, null, 2) + "\n");
   } catch {}
 }
 
@@ -675,8 +682,7 @@ function saveMenu() {
     all.menus[ROOT] = state.repos.map(({ fresh, gh, children, expanded, ...r }) => ({
       ...r, children: null, expanded: false,
     }));
-    fsSync.mkdirSync(path.dirname(MENU_CACHE), { recursive: true });
-    fsSync.writeFileSync(MENU_CACHE, JSON.stringify(all));
+    writePrivate(MENU_CACHE, JSON.stringify(all));
   } catch {}
 }
 
@@ -786,6 +792,25 @@ function scrubRemote(url) {
     .replace(/^(?:git\+)?ssh:\/\//, "")
     .replace(/^https?:\/\//, "")
     .replace(/\.git$/, "");
+}
+
+// A plate's README or package.json is the plate's to make — and it can be a
+// symlink to ~/.ssh/id_ed25519, a FIFO, or /dev/zero. Only a plain file is
+// read: O_NOFOLLOW refuses a symlink, O_NONBLOCK keeps a FIFO from hanging
+// the open, fstat (on the handle actually opened, so nothing can be swapped
+// in between) insists on a regular file, and nothing past `cap` is read.
+async function readPlainFile(file, cap = 64 * 1024) {
+  const { O_RDONLY, O_NOFOLLOW = 0, O_NONBLOCK = 0 } = fsSync.constants;
+  const fh = await fs.open(file, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+  try {
+    const st = await fh.stat();
+    if (!st.isFile()) throw new Error(`not a plain file: ${file}`);
+    const buf = Buffer.alloc(Math.min(cap, st.size));
+    const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+    return buf.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    await fh.close();
+  }
 }
 
 async function walkStats(dir, acc, depth = 0) {
@@ -964,7 +989,7 @@ async function scanRepo(dirent, base = ROOT, depth = 0) {
     .map(([name, bytes]) => ({ name, pct: (bytes / total) * 100 }));
 
   try {
-    const pkg = JSON.parse(await fs.readFile(path.join(dir, "package.json"), "utf8"));
+    const pkg = JSON.parse(await readPlainFile(path.join(dir, "package.json")));
     const deps = { ...pkg.dependencies, ...pkg.devDependencies };
     for (const chip of STACK_CHIPS) if (deps[chip.dep]) repo.chips.push(chip);
     if (typeof pkg.version === "string") repo.version = scrubText(pkg.version).slice(0, 32);
@@ -990,7 +1015,7 @@ async function scanRepo(dirent, base = ROOT, depth = 0) {
 
   for (const rm of ["README.md", "readme.md", "README"]) {
     try {
-      const head = (await fs.readFile(path.join(dir, rm), "utf8")).split("\n");
+      const head = (await readPlainFile(path.join(dir, rm))).split("\n");
       // first line of actual prose — skip headings, HTML, badges, images,
       // blockquotes, tables, rules, and frontmatter fences
       const line =
@@ -3569,7 +3594,7 @@ async function openPeek(repo, ch) {
   if (!text) text = await git(repo.dir, "diff", ...DIFF_SAFE, "--cached", "--", p);
   if (!text) {
     try {
-      const raw = await fs.readFile(path.join(repo.dir, p), "utf8");
+      const raw = await readPlainFile(path.join(repo.dir, p), 256 * 1024);
       text = raw.split("\n").slice(0, 1000).map((l) => "+" + l).join("\n");
     } catch {}
   }
@@ -3969,8 +3994,7 @@ function onKey(buf) {
     // sit down: leave the seat for the iz() wrapper to cd into (see README)
     if (!DEMO)
       try {
-        fsSync.mkdirSync(path.dirname(SEAT_FILE), { recursive: true });
-        fsSync.writeFileSync(SEAT_FILE, sel.dir);
+        writePrivate(SEAT_FILE, sel.dir);
       } catch {}
     return leave();
   }
@@ -4346,8 +4370,7 @@ if (ARG_QUERY && !DEMO) {
     const pick = exact.length === 1 ? exact[0][1] : hits.length === 1 ? hits[0][1] : null;
     if (pick && fsSync.existsSync(pick.dir)) {
       try {
-        fsSync.mkdirSync(path.dirname(SEAT_FILE), { recursive: true });
-        fsSync.writeFileSync(SEAT_FILE, pick.dir);
+        writePrivate(SEAT_FILE, pick.dir);
       } catch {}
       process.stdout.write(
         `${G.lantern} ${fg(T.magenta)}seated${RESET} — ${pick.dir.replace(os.homedir(), "~")}\n`
@@ -4408,6 +4431,6 @@ export {
   agentDefinitions, codexSessionMeta, aiTally, codexModelLabel, parseWorktrees,
   offBranch, lastSeen, standupSince,
   marketGate, marketMove, helpColumns,
-  hardenedGitArgs, gitPins, DIFF_SAFE, macBundleLike,
+  hardenedGitArgs, gitPins, DIFF_SAFE, macBundleLike, readPlainFile, writePrivate,
   THEMES, T, LANGS, G,
 };
