@@ -34,10 +34,12 @@ menu at a small Tokyo bar.
   rebase / cherry-pick / revert / bisect, or has an agent cooking in it;
   after the fetch, fast-forward only when it is behind, not ahead, and has
   no unsettled tracked files. Never a merge commit, rebase, stash, reset,
-  force, or prune; never another branch; never submodules. Hooks are off
-  (`core.hooksPath` → the null device), nothing may prompt (detached child,
-  `GIT_TERMINAL_PROMPT=0`, ssh `BatchMode` unless the user configured their
-  own ssh command), and each git call has a 30s timeout. Changing that
+  force, or prune; never another branch; never submodules; never the
+  `ext::` transport. Hooks are off (`core.hooksPath` → the null device),
+  nothing may prompt (detached child, `GIT_TERMINAL_PROMPT=0`, ssh
+  `BatchMode` unless the user configured their own ssh command — in their
+  system/global config or env, never the plate's), and each git call has a
+  30s timeout. Changing that
   recipe is changing the house rules — update this paragraph with it. Beyond
   the market run, the only side effects allowed are launches: `o` (file
   manager), `t` (terminal window at the repo), `e` (editor), `a` (agent
@@ -96,9 +98,18 @@ menu at a small Tokyo bar.
   market run, it writes to repos by design, and it lives in its own block.
 - Width math is ANSI-aware and CJK-aware (`visW`/`truncW`/`padW`) — any new
   rendering must go through those helpers or alignment breaks.
+- **A repo's config is untrusted too.** Every git call — scan, peek, market —
+  goes out through `hardenedGitArgs`: `--no-optional-locks`, fsmonitor off,
+  hooks to the null device, plus `repoPins`, which resets any program-naming
+  key (filter drivers, credential helpers, askpass, gitProxy, sshCommand,
+  uploadpack) the plate's own local/worktree config sets back to the user's
+  values. Diffs carry `DIFF_SAFE` (`--no-ext-diff --no-textconv`). Files read
+  out of a plate go through `readPlainFile` (no symlinks, no FIFOs, capped).
 - **A repo's words are untrusted.** Anything read out of a scanned repo —
-  commit subjects, authors, README lines, folder names, worktree paths — goes
-  through `scrubText` at scan time, before it's cached or painted. A raw ESC
+  commit subjects, authors, README lines, folder names, worktree paths,
+  branch names — goes through `scrubText` (C0, DEL, and C1) at scan time,
+  before it's cached or painted. Change paths stay raw (git needs the real
+  bytes) and are scrubbed where they're painted. A raw ESC
   in a commit message is a command to the user's terminal.
 - Frames go out through `paint()`, one write wrapped in synchronized output
   (DEC 2026) so a repaint never tears.
